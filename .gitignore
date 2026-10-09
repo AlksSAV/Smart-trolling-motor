@@ -1,0 +1,17 @@
+build/
+output/
+*.elf
+*.bin
+*.uf2
+*.hex
+*.map
+.venv/
+__pycache__/
+*.pyc
+data/raw/
+data/logs/
+.vscode/
+.idea/
+.DS_Store
+secrets.py
+*.key
