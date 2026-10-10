@@ -2,11 +2,26 @@
 
 Электронный якорь для лодки: при активации удержания бесщёточный мотор (ESC) удерживает лодку в заданной позиции. Мотор установлен на носу, поворачивается сервоприводом на 45 градусов в каждую сторону от диаметральной плоскости.
 
-## Оборудование
+## Статус проекта
+✅ Базовый фреймворк реализован и успешно собран.
+🚧 Требуется тестирование оборудования и настройка PID.
 
-См. docs/equipment.md
+## Оборудование
+См. [docs/equipment.md](docs/equipment.md)
 
 ## Проект
+PlatformIO, env `esp32s3`. 
+- Сборка и прошивка: [docs/platformio.md](docs/platformio.md)
+- Пины: [docs/pinmap.md](docs/pinmap.md)
+- Прогресс: [TODO.md](TODO.md)
+- Изменения: [CHANGELOG.md](CHANGELOG.md)
 
-PlatformIO, env `esp32s3`. Сборка и прошивка: docs/platformio.md.
-Пины: docs/pinmap.md. Прогресс: TODO.md, изменения: CHANGELOG.md.
+## Структура кода
+- `src/config.h` — конфигурация пинов и параметров
+- `src/esc_control.*` — управление тягой мотора
+- `src/servo_control.*` — управление углом поворота
+- `src/rc_receiver.*` — чтение сигналов с пульта HotRC DS650
+- `src/gnss_module.*` — парсинг NMEA данных с NEO-M10N
+- `src/imu_module.*` — работа с компасом BNO085
+- `src/position_hold.*` — алгоритм удержания позиции (PID)
+- `src/main.cpp` — точка входа и интеграция модулей
