@@ -1,0 +1,151 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_BNO08x.h>
+
+// --- Hardware Pins ---
+#define I2C_SDA 12
+#define I2C_SCL 13
+#define BNO08X_ADDRESS 0x4B
+#define BNO08X_RESET -1
+
+#define SERVO_PIN 16  // GPIO 16 for servo PWM
+
+// --- Global Objects ---
+Adafruit_BNO08x bno08x(BNO08X_RESET);
+sh2_SensorValue_t sensorValue;
+bool imu_ready = false;
+
+// --- Servo Parameters ---
+const int SERVO_NEUTRAL_US = 1500;
+const int SERVO_MIN_US = 1000;
+const int SERVO_MAX_US = 2000;
+const float SERVO_P_GAIN = 8.0;
+const float TARGET_BEARING = 90.0;
+
+// --- Math Helpers ---
+float normalizeAngleDiff(float target, float current) {
+    float diff = target - current;
+    while (diff > 180.0) diff -= 360.0;
+    while (diff < -180.0) diff += 360.0;
+    return diff;
+}
+
+float constrainFloat(float val, float minVal, float maxVal) {
+    if (val < minVal) return minVal;
+    if (val > maxVal) return maxVal;
+    return val;
+}
+
+void setup() {
+    Serial.begin(115200);
+    while (!Serial) { delay(10); }
+    
+    Serial.println("\n=== Servo Test with ArduPilot Logic ===");
+    Serial.println("Waiting 2 seconds for IMU to power up...");
+    delay(2000);
+
+    // 1. Init IMU
+    Serial.println("\n[IMU] Initializing BNO085...");
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.setClock(400000);
+    
+    int imu_attempts = 0;
+    while (!imu_ready && imu_attempts < 3) {
+        imu_attempts++;
+        Serial.printf("[IMU] Attempt %d/3...\n", imu_attempts);
+        if (bno08x.begin_I2C(BNO08X_ADDRESS)) {
+            Serial.println("[IMU] ✓ SUCCESS: BNO085 initialized at 0x4B");
+            bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 50000);
+            imu_ready = true;
+        } else {
+            Serial.println("[IMU] ✗ Failed. Retrying...");
+            delay(1000);
+        }
+    }
+    
+    if (!imu_ready) {
+        Serial.println("\n[IMU] ✗✗✗ CRITICAL ERROR: BNO085 not responding!");
+        while (1) { delay(100); }
+    }
+
+    // 2. Init Servo using simple LEDC API (ESP32 Core v3.x compatible)
+    Serial.println("\n[SERVO] Initializing PWM on GPIO 16...");
+    
+    // Упрощенная конфигурация LEDC для ESP32 Core v3.x
+    ledcAttach(SERVO_PIN, 50, 14);  // 50Hz, 14-bit resolution
+    ledcWrite(SERVO_PIN, 12288);     // Нейтраль: 1500µs = (1500/20000) * 16384 = 12288
+    
+    Serial.printf("[SERVO] ✓ Initialized at neutral (1500 µs)\n");
+    Serial.println("\n>>> Rotate the board to see servo movement <<<");
+    Serial.println(">>> Target bearing: 90° (simulated) <<<\n");
+    
+    // Тестовая последовательность для проверки
+    Serial.println("[TEST] Moving servo through range...");
+    delay(1000);
+    
+    // Минимум (1000µs)
+    ledcWrite(SERVO_PIN, 8192);  // (1000/20000) * 16384 = 8192
+    Serial.println("[TEST] Position: 1000 µs (MIN)");
+    delay(2000);
+    
+    // Нейтраль (1500µs)
+    ledcWrite(SERVO_PIN, 12288);  // (1500/20000) * 16384 = 12288
+    Serial.println("[TEST] Position: 1500 µs (NEUTRAL)");
+    delay(2000);
+    
+    // Максимум (2000µs)
+    ledcWrite(SERVO_PIN, 16384);  // (2000/20000) * 16384 = 16384
+    Serial.println("[TEST] Position: 2000 µs (MAX)");
+    delay(2000);
+    
+    // Возврат в нейтраль
+    ledcWrite(SERVO_PIN, 12288);
+    Serial.println("[TEST] Back to neutral. Starting IMU control...\n");
+    delay(1000);
+}
+
+void loop() {
+    // 1. Read IMU
+    if (imu_ready) {
+        bno08x.getSensorEvent(&sensorValue);
+    }
+
+    // 2. Calculate and apply servo position
+    static unsigned long last_update = 0;
+    if (millis() - last_update > 50) {  // 20 Hz
+        if (imu_ready) {
+            // Get current yaw
+            float real = sensorValue.un.arvrStabilizedRV.real;
+            float i = sensorValue.un.arvrStabilizedRV.i;
+            float j = sensorValue.un.arvrStabilizedRV.j;
+            float k = sensorValue.un.arvrStabilizedRV.k;
+            float currentYaw = atan2(2.0 * (real * k + i * j), 1.0 - 2.0 * (j * j + k * k)) * 180.0 / PI;
+            if (currentYaw < 0) currentYaw += 360.0;
+
+            // Calculate heading error
+            float headingError = normalizeAngleDiff(TARGET_BEARING, currentYaw);
+            
+            // Calculate servo PWM using P-controller
+            float servoDeviation = constrainFloat(headingError * SERVO_P_GAIN, 
+                                                   -(SERVO_NEUTRAL_US - SERVO_MIN_US), 
+                                                   (SERVO_MAX_US - SERVO_NEUTRAL_US));
+            int servoPWM = SERVO_NEUTRAL_US + servoDeviation;
+            
+            // Convert microseconds to LEDC duty (14-bit, 50Hz)
+            // Formula: duty = (us / 20000) * 16384
+            uint32_t duty = (servoPWM * 16384) / 20000;
+            
+            // Apply to servo
+            ledcWrite(SERVO_PIN, duty);
+
+            // Debug output (every 500ms)
+            static unsigned long last_print = 0;
+            if (millis() - last_print > 500) {
+                Serial.printf("[IMU] Yaw: %6.1f° | [PID] Head Err: %6.1f° | [SERVO] PWM: %4d µs (duty: %5d)\n", 
+                              currentYaw, headingError, servoPWM, duty);
+                last_print = millis();
+            }
+        }
+        last_update = millis();
+    }
+}
