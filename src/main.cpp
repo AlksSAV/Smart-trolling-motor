@@ -11,11 +11,11 @@
 #define BNO08X_ADDRESS  0x4B
 #define BNO08X_RESET    -1
 
-#define GNSS_RX         18   // ESP32 RX <- GNSS TX
-#define GNSS_TX         17   // ESP32 TX -> GNSS RX
+#define GNSS_RX         18
+#define GNSS_TX         17
 
-#define ESC_PIN         15   // LEDC ch0, 50Hz, 1000-2000us
-#define SERVO_PIN       16   // LEDC ch1, 50Hz, +/-45 deg
+#define ESC_PIN         15
+#define SERVO_PIN       16
 
 // ============================================================
 // Global Objects
@@ -52,24 +52,22 @@ bool isSimulatedTarget = false;
 // ============================================================
 // ArduPilot-inspired Loiter Parameters
 // ============================================================
-const float LOITER_RADIUS_M    = 2.0;    // Dead zone radius (meters)
-const float MAX_DISTANCE_M     = 10.0;   // Distance for 100% throttle
-const float SERVO_P_GAIN       = 8.0;    // PWM us per degree of heading error
-const float LOITER_SPEED_GAIN  = 0.15;   // Speed factor per meter outside radius
+const float LOITER_RADIUS_M    = 2.0;
+const float MAX_DISTANCE_M     = 10.0;
+const float SERVO_P_GAIN       = 8.0;
+const float LOITER_SPEED_GAIN  = 0.15;
 
-// PWM limits
 const int ESC_NEUTRAL_US       = 1500;
-const int ESC_MAX_FORWARD_US   = 1800;   // Max forward throttle
+const int ESC_MAX_FORWARD_US   = 1800;
 const int SERVO_NEUTRAL_US     = 1500;
-const int SERVO_MIN_US         = 1000;   // -45 deg
-const int SERVO_MAX_US         = 2000;   // +45 deg
+const int SERVO_MIN_US         = 1000;
+const int SERVO_MAX_US         = 2000;
 
-// LEDC config (ESP32 Core v3.x)
 const int LEDC_FREQ            = 50;
-const int LEDC_RESOLUTION      = 14;     // 14-bit = 16384 steps
+const int LEDC_RESOLUTION      = 14;
 
 // ============================================================
-// UBX Helper: send binary config to GNSS module
+// UBX Helper
 // ============================================================
 void sendUBX(uint8_t cls, uint8_t id, uint8_t* payload, uint16_t length) {
     gnssSerial.write(0xB5);
@@ -121,17 +119,10 @@ float constrainFloat(float val, float minVal, float maxVal) {
     return val;
 }
 
-// ============================================================
-// LEDC Helper: convert microseconds to duty cycle
-// ============================================================
 uint32_t usToDuty(uint32_t us) {
-    // 14-bit: 2^14 = 16384, period = 20000us at 50Hz
     return (us * 16384) / 20000;
 }
 
-// ============================================================
-// Get current yaw from IMU (degrees, 0-360)
-// ============================================================
 float getCurrentYaw() {
     float real = sensorValue.un.arvrStabilizedRV.real;
     float i    = sensorValue.un.arvrStabilizedRV.i;
@@ -143,9 +134,6 @@ float getCurrentYaw() {
     return yaw;
 }
 
-// ============================================================
-// Forward Declarations
-// ============================================================
 void processSerialCommands();
 void calculateAndApplyControl();
 void displaySystemStatus();
@@ -158,14 +146,13 @@ void setup() {
     while (!Serial) { delay(10); }
 
     Serial.println("\n========================================");
-    Serial.println("  Smart Trolling Motor v0.3.0");
-    Serial.println("  IMU + GNSS + ArduPilot Loiter Logic");
-    Serial.println("  Servo (GPIO16) + ESC (GPIO15)");
+    Serial.println("  Smart Trolling Motor v0.3.1");
+    Serial.println("  ESC Test Sequence Added");
     Serial.println("========================================");
     Serial.println("Waiting 2 seconds for modules to power up...");
     delay(2000);
 
-    // --- 1. Init IMU (I2C) ---
+    // --- 1. Init IMU ---
     Serial.println("\n[IMU] Initializing BNO085...");
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
@@ -175,7 +162,7 @@ void setup() {
         imu_attempts++;
         Serial.printf("[IMU] Attempt %d/3...\n", imu_attempts);
         if (bno08x.begin_I2C(BNO08X_ADDRESS)) {
-            bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 50000); // 20Hz
+            bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 50000);
             imu_ready = true;
             Serial.println("[IMU] OK: BNO085 initialized at 0x4B");
         } else {
@@ -187,7 +174,7 @@ void setup() {
         Serial.println("[IMU] CRITICAL ERROR: BNO085 not responding!");
     }
 
-    // --- 2. Init GNSS (UART1) ---
+    // --- 2. Init GNSS ---
     Serial.println("\n[GNSS] Initializing UART1...");
     gnssSerial.begin(GNSS_BAUD, SERIAL_8N1, GNSS_RX, GNSS_TX);
     Serial.printf("[GNSS] OK: Listening at %lu baud.\n", GNSS_BAUD);
@@ -197,15 +184,13 @@ void setup() {
         Serial.println("[GNSS] Sending UBX config: 5Hz + Sea mode...");
         delay(500);
 
-        // UBX-CFG-RATE: 200ms (5Hz)
         uint8_t ratePayload[] = {0xC8, 0x00, 0x01, 0x00, 0x00, 0x00};
         sendUBX(0x06, 0x08, ratePayload, sizeof(ratePayload));
 
-        // UBX-CFG-NAV5: dynModel = 6 (Sea)
         uint8_t nav5Payload[36] = {0};
-        nav5Payload[0] = 0x01;  // mask: apply dynModel
+        nav5Payload[0] = 0x01;
         nav5Payload[1] = 0x00;
-        nav5Payload[2] = 0x06;  // Sea
+        nav5Payload[2] = 0x06;
         sendUBX(0x06, 0x24, nav5Payload, sizeof(nav5Payload));
 
         ubx_configured = true;
@@ -215,22 +200,72 @@ void setup() {
     // --- 4. Init LEDC for ESC and Servo ---
     Serial.println("\n[LEDC] Initializing PWM outputs...");
 
-    // ESC on GPIO 15
     ledcAttach(ESC_PIN, LEDC_FREQ, LEDC_RESOLUTION);
-    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
-    Serial.printf("[LEDC] ESC  (GPIO %d): neutral %d us\n", ESC_PIN, ESC_NEUTRAL_US);
-
-    // Servo on GPIO 16
     ledcAttach(SERVO_PIN, LEDC_FREQ, LEDC_RESOLUTION);
-    ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
-    Serial.printf("[LEDC] Servo (GPIO %d): neutral %d us\n", SERVO_PIN, SERVO_NEUTRAL_US);
 
-    // --- 5. Print help ---
-    Serial.println("\n>>> Serial Commands:");
-    Serial.println("    'M' = Manual (ESC neutral, servo neutral)");
-    Serial.println("    'H' = Heading Hold (lock current yaw, servo active)");
-    Serial.println("    'A' = Anchor Hold (lock GPS position, full loiter)");
-    Serial.println("    'S' = Simulate Anchor (fake target 5m at 90 deg)");
+    // --- 5. ESC TEST SEQUENCE ---
+    Serial.println("\n========================================");
+    Serial.println("  ESC TEST SEQUENCE");
+    Serial.println("  Listen for ESC beeps!");
+    Serial.println("========================================");
+
+    // Step 1: Neutral (ESC should beep once to acknowledge)
+    Serial.println("\n[ESC TEST] Step 1: Neutral (1500 us)");
+    Serial.println(">>> ESC should beep ONCE <<<");
+    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
+    delay(3000);
+
+    // Step 2: Arm (some ESCs need this)
+    Serial.println("\n[ESC TEST] Step 2: Minimum throttle (1000 us) for 2 sec");
+    Serial.println(">>> ESC should beep to confirm arming <<<");
+    ledcWrite(ESC_PIN, usToDuty(1000));
+    delay(2000);
+
+    // Step 3: Back to neutral
+    Serial.println("\n[ESC TEST] Step 3: Back to neutral (1500 us)");
+    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
+    delay(1000);
+
+    // Step 4: Small throttle increase (motor should spin slowly if connected)
+    Serial.println("\n[ESC TEST] Step 4: Small throttle (1550 us)");
+    Serial.println(">>> If motor connected, it should spin slowly <<<");
+    ledcWrite(ESC_PIN, usToDuty(1550));
+    delay(2000);
+
+    // Step 5: Back to neutral
+    Serial.println("\n[ESC TEST] Step 5: Back to neutral (1500 us)");
+    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
+    delay(1000);
+
+    // Step 6: Servo test
+    Serial.println("\n[SERVO TEST] Moving servo through range...");
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_MIN_US));
+    Serial.println("[SERVO] Position: 1000 us (MIN)");
+    delay(1500);
+
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
+    Serial.println("[SERVO] Position: 1500 us (NEUTRAL)");
+    delay(1500);
+
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_MAX_US));
+    Serial.println("[SERVO] Position: 2000 us (MAX)");
+    delay(1500);
+
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
+    Serial.println("[SERVO] Back to neutral");
+    delay(1000);
+
+    Serial.println("\n========================================");
+    Serial.println("  TEST COMPLETE");
+    Serial.println("  Starting normal operation...");
+    Serial.println("========================================\n");
+
+    // --- 6. Print help ---
+    Serial.println(">>> Serial Commands:");
+    Serial.println("    'M' = Manual");
+    Serial.println("    'H' = Heading Hold");
+    Serial.println("    'A' = Anchor Hold");
+    Serial.println("    'S' = Simulate Anchor");
     Serial.println("========================================\n");
 }
 
@@ -238,29 +273,24 @@ void setup() {
 // Main Loop
 // ============================================================
 void loop() {
-    // 1. Read IMU
     if (imu_ready) {
         bno08x.getSensorEvent(&sensorValue);
     }
 
-    // 2. Read GNSS
     while (gnssSerial.available() > 0) {
         if (gps.encode(gnssSerial.read())) {
             parsed_sentences++;
         }
     }
 
-    // 3. Process Serial Commands
     processSerialCommands();
 
-    // 4. Calculate and apply control outputs (20 Hz)
     static unsigned long last_control = 0;
     if (millis() - last_control > 50) {
         calculateAndApplyControl();
         last_control = millis();
     }
 
-    // 5. Display status (1 Hz)
     static unsigned long last_print = 0;
     if (millis() - last_print > 1000) {
         displaySystemStatus();
@@ -279,7 +309,6 @@ void processSerialCommands() {
     if (cmd == 'M') {
         currentMode = MODE_MANUAL;
         isSimulatedTarget = false;
-        // Reset outputs to neutral
         ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
         ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
         Serial.println("\n[MODE] MANUAL");
@@ -308,9 +337,9 @@ void processSerialCommands() {
     else if (cmd == 'S') {
         currentMode = MODE_ANCHOR_HOLD;
         isSimulatedTarget = true;
-        targetLat = 55.7558;  // Fake coordinates
+        targetLat = 55.7558;
         targetLon = 37.6173;
-        Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED). Target: 5m at 90 deg");
+        Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED). Target: 9m at 90 deg");
     }
 }
 
@@ -325,12 +354,10 @@ void calculateAndApplyControl() {
     int servoPWM = SERVO_NEUTRAL_US;
 
     if (currentMode == MODE_MANUAL) {
-        // Manual: outputs stay neutral (RC receiver will override later)
         escPWM = ESC_NEUTRAL_US;
         servoPWM = SERVO_NEUTRAL_US;
     }
     else if (currentMode == MODE_HEADING_HOLD) {
-        // Heading Hold: only servo active, ESC neutral
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);
         float servoDev = constrainFloat(yawError * SERVO_P_GAIN,
                                          -(SERVO_NEUTRAL_US - SERVO_MIN_US),
@@ -339,12 +366,11 @@ void calculateAndApplyControl() {
         escPWM = ESC_NEUTRAL_US;
     }
     else if (currentMode == MODE_ANCHOR_HOLD) {
-        // Anchor Hold: full ArduPilot Loiter Logic
         float distance = 0.0;
         float bearing = 0.0;
 
         if (isSimulatedTarget) {
-            distance = 5.0;
+            distance = 9.0;  // ИЗМЕНЕНО с 5.0 на 9.0
             bearing = 90.0;
         } else if (gps.location.isValid()) {
             distance = gps.distanceBetween(
@@ -356,13 +382,9 @@ void calculateAndApplyControl() {
         }
 
         float headingError = normalizeAngleDiff(bearing, currentYaw);
-
-        // ArduPilot Yaw Error Ratio: reduce speed when heading error is large
-        // 45 deg error -> 75% speed, 90 deg error -> 50% speed
         float yawErrorRatio = 1.0 - (constrainFloat(fabsf(headingError), 0.0, 90.0) / 90.0) * 0.5;
 
         if (distance > LOITER_RADIUS_M) {
-            // Outside loiter radius: P-controller for speed
             float distanceError = distance - LOITER_RADIUS_M;
             float speedFactor = constrainFloat(
                 distanceError / (MAX_DISTANCE_M - LOITER_RADIUS_M), 0.0, 1.0);
@@ -370,13 +392,11 @@ void calculateAndApplyControl() {
 
             escPWM = ESC_NEUTRAL_US + (int)(effectiveSpeed * (ESC_MAX_FORWARD_US - ESC_NEUTRAL_US));
 
-            // Servo: steer towards target
             float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
                                              -(SERVO_NEUTRAL_US - SERVO_MIN_US),
                                              (SERVO_MAX_US - SERVO_NEUTRAL_US));
             servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
         } else {
-            // Inside loiter radius: stop motor, maintain heading
             escPWM = ESC_NEUTRAL_US;
             float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
                                              -(SERVO_NEUTRAL_US - SERVO_MIN_US),
@@ -385,7 +405,6 @@ void calculateAndApplyControl() {
         }
     }
 
-    // Apply PWM outputs
     ledcWrite(ESC_PIN, usToDuty(escPWM));
     ledcWrite(SERVO_PIN, usToDuty(servoPWM));
 }
@@ -396,7 +415,6 @@ void calculateAndApplyControl() {
 void displaySystemStatus() {
     Serial.println("----------------------------------------");
 
-    // Mode
     String modeStr;
     switch (currentMode) {
         case MODE_MANUAL:       modeStr = "MANUAL";       break;
@@ -406,7 +424,6 @@ void displaySystemStatus() {
     if (isSimulatedTarget) modeStr += " (SIM)";
     Serial.printf("[SYS] Mode: %-16s\n", modeStr.c_str());
 
-    // IMU
     float currentYaw = 0.0;
     if (imu_ready) {
         currentYaw = getCurrentYaw();
@@ -415,14 +432,12 @@ void displaySystemStatus() {
         Serial.println("[IMU] NOT READY");
     }
 
-    // GNSS
     float hz = (parsed_sentences * 1000.0) / 1000.0;
     parsed_sentences = 0;
     Serial.printf("[GNSS] ~%.0f Hz | Sats: %2d | Fix: %s\n",
                   hz, gps.satellites.value(),
                   gps.location.isValid() ? "YES" : "NO");
 
-    // Control outputs (read back what was applied)
     if (currentMode == MODE_HEADING_HOLD && imu_ready) {
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);
         float servoDev = constrainFloat(yawError * SERVO_P_GAIN,
@@ -433,7 +448,7 @@ void displaySystemStatus() {
                       targetYaw, yawError, servoPWM);
     }
     else if (currentMode == MODE_ANCHOR_HOLD && imu_ready) {
-        float distance = isSimulatedTarget ? 5.0 :
+        float distance = isSimulatedTarget ? 9.0 :  // ИЗМЕНЕНО с 5.0 на 9.0
             (gps.location.isValid() ?
                 gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0);
         float bearing = isSimulatedTarget ? 90.0 :
