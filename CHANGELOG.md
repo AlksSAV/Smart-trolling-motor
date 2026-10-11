@@ -1,5 +1,6 @@
 # CHANGELOG
 Dates are real. Status: "verified" — what was verified; otherwise — not verified.
+
 ## [v0.3.0] - 2026-10-11 (Full Integration: IMU + GNSS + Servo + ESC + ArduPilot Logic)
 ### Added
 - Unified main.cpp with all subsystems: IMU, GNSS, LEDC outputs, State Machine
@@ -15,8 +16,8 @@ Dates are real. Status: "verified" — what was verified; otherwise — not veri
 ### Verified
 - Servo physical movement confirmed: responds to IMU yaw changes in real-time
 - ESC PWM output verified on GPIO 15 (neutral 1500us)
-- ArduPilot Yaw Error Ratio working: speed reduces at large heading errors
-- State Machine transitions: Manual <-> Heading Hold <-> Anchor Hold (SIM)
+- ArduPilot Yaw Error Ratio working: speed reduces at large heading errors (50% at 90°+)
+- State Machine transitions: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
 - GNSS UBX config: 5Hz + Sea mode active (~60 sentences/sec)
 
 ## [v0.2.0] - 2026-10-11 (State Machine & Bearing)
