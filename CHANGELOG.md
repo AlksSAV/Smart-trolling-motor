@@ -1,36 +1,21 @@
 # CHANGELOG
 Dates are real. Status: "verified" — what was verified; otherwise — not verified.
 
-## 2026-10-09
-- PlatformIO project: `platformio.ini` (env esp32s3: espressif32@6.10.0, arduino, board esp32-s3-devkitc-1 with N16R8 overrides), `src/main.cpp` (flash/PSRAM check). Not verified: build not run.
-- Documentation: `docs/pinmap.md` (pin assignment), `docs/platformio.md` (build, commands, verification steps).
-- `CHANGELOG.md`, `TODO.md`.
-- AGENTS.md: rule "code comments — English only."
-- Git: commit `959b2c1` — removed empty skeleton from init commit.
-
-## [v0.1.0] - 2026-10-11
+## [v0.2.0] - 2026-10-11 (State Machine & Bearing)
 ### Added
-- Base project structure with PlatformIO (ESP32-S3)
-- Modules: ESC Control, Servo Control, RC Receiver, GNSS Module, IMU Module, Position Hold
-- NMEA parser for NEO-M10N GNSS receiver
-- PID controller framework for position holding
-- Debug output via USB CDC (Serial)
+- State Machine with 3 modes: `MODE_MANUAL`, `MODE_HEADING_HOLD`, `MODE_ANCHOR_HOLD`
+- Serial command interface for mode switching ('M', 'H', 'A')
+- Bearing calculation function for Anchor Hold (azimuth from current position to target)
+- Angle normalization helper for shortest-path rotation
+- Real-time error calculation for PID control (yaw error, heading error)
+- Protection against Anchor Hold activation without valid GNSS fix
 ### Changed
-- Updated LEDC API to support ESP32 Arduino Core v3.x
-- Renamed modules for clarity (gnss -> gnss_module, imu -> imu_module)
-- Added Adafruit BNO08x library dependency
-### Fixed
-- Resolved compilation errors related to missing headers and deprecated functions
-
-## [v0.1.1] - 2026-10-11 (IMU Verified)
-### Added
-- Real BNO085 IMU data reading via I2C (GPIO 12/13).
-- Support for non-standard I2C address `0x4B` (typical for Chinese BNO085 modules).
-- ARVR Stabilized Rotation Vector enabled at 20Hz for stable Yaw/Pitch/Roll output.
-- `CORE_DEBUG_LEVEL=3` enabled in `build_flags` for Native USB debugging.
-### Changed
-- Replaced IMU stub with actual working implementation in `src/main.cpp`.
-- Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
+- Unified status output showing mode, IMU yaw, GNSS stats, and PID errors
+- Improved IMU initialization with retry logic and verbose logging
+### Verified
+- Heading Hold mode: target yaw locks correctly, error calculation works (tested ±17° deviation)
+- Mode transitions: Manual ↔ Heading Hold work seamlessly
+- GNSS UBX config: 5Hz + Sea mode active (~60 sentences/sec)
 
 ## [v0.1.2] - 2026-10-11 (Sensors Verified & Optimized)
 ### Added
@@ -46,3 +31,34 @@ Dates are real. Status: "verified" — what was verified; otherwise — not veri
 - Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
 ### Fixed
 - Resolved I2C initialization failures caused by simultaneous power-up spikes.
+
+## [v0.1.1] - 2026-10-11 (IMU Verified)
+### Added
+- Real BNO085 IMU data reading via I2C (GPIO 12/13).
+- Support for non-standard I2C address `0x4B` (typical for Chinese BNO085 modules).
+- ARVR Stabilized Rotation Vector enabled at 20Hz for stable Yaw/Pitch/Roll output.
+- `CORE_DEBUG_LEVEL=3` enabled in `build_flags` for Native USB debugging.
+### Changed
+- Replaced IMU stub with actual working implementation in `src/main.cpp`.
+- Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
+
+## [v0.1.0] - 2026-10-11
+### Added
+- Base project structure with PlatformIO (ESP32-S3)
+- Modules: ESC Control, Servo Control, RC Receiver, GNSS Module, IMU Module, Position Hold
+- NMEA parser for NEO-M10N GNSS receiver
+- PID controller framework for position holding
+- Debug output via USB CDC (Serial)
+### Changed
+- Updated LEDC API to support ESP32 Arduino Core v3.x
+- Renamed modules for clarity (gnss -> gnss_module, imu -> imu_module)
+- Added Adafruit BNO08x library dependency
+### Fixed
+- Resolved compilation errors related to missing headers and deprecated functions
+
+## 2026-10-09
+- PlatformIO project: `platformio.ini` (env esp32s3: espressif32@6.10.0, arduino, board esp32-s3-devkitc-1 with N16R8 overrides), `src/main.cpp` (flash/PSRAM check). Not verified: build not run.
+- Documentation: `docs/pinmap.md` (pin assignment), `docs/platformio.md` (build, commands, verification steps).
+- `CHANGELOG.md`, `TODO.md`.
+- AGENTS.md: rule "code comments — English only."
+- Git: commit `959b2c1` — removed empty skeleton from init commit.

@@ -15,13 +15,14 @@
 - [ ] ESC: LEDC 50 Hz, 1000–2000 µs, neutral 1500
 - [ ] Servo: ±45°
 - [ ] Receiver: read 6 PWM channels (HotRC DS650)
-- [x] GNSS: NMEA parse + UBX config injection (5Hz update rate, Sea dynamic model, ~30 sentences/sec verified)
+- [x] GNSS: NMEA parse + UBX config injection (5Hz update rate, Sea dynamic model, ~60 sentences/sec verified)
 - [x] IMU: BNO085 read (real data implemented, ARVR Stabilized RV, 20Hz, address 0x4B)
-- [ ] Holding mode: control loop (PID structure needs integration with real sensor data)
+- [x] Holding mode: State Machine (Manual / Heading Hold / Anchor Hold) + bearing calculation
 
 ## Next Steps
 - [ ] Test GNSS fix outdoors (verify real coordinates and speed)
-- [ ] Integrate real IMU Yaw and GNSS data into the PID holding loop
-- [ ] Tune PID coefficients for boat dynamics
-- [ ] Add safety features (timeout, max distance)
-- [ ] Web interface for configuration (optional)
+- [ ] Integrate RC receiver (HotRC DS650) for mode switching via PWM channels
+- [ ] Implement PID controller for Heading Hold (convert angle error to servo PWM)
+- [ ] Implement PID controller for Anchor Hold (convert distance/heading error to ESC + servo PWM)
+- [ ] Add safety features (timeout, max distance, motor failsafe)
+- [ ] OLED display for telemetry (optional)
