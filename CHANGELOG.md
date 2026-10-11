@@ -31,3 +31,12 @@ Dates are real. Status: "verified" — what was verified; otherwise — not veri
 ### Changed
 - Replaced IMU stub with actual working implementation in `src/main.cpp`.
 - Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
+
+## [v0.1.2] - 2026-10-11 (GNSS Optimized)
+### Added
+- Hybrid GNSS approach: UBX configuration commands sent at startup.
+- UBX-CFG-RATE: Increased navigation update rate to 5Hz (200ms) for smoother PID control.
+- UBX-CFG-NAV5: Set dynamic model to "Sea" (6) to filter out wave-induced position jumps.
+- Automatic UBX checksum calculation helper (`sendUBX`).
+### Changed
+- Unified IMU + GNSS status output in `main.cpp` for easier debugging.

@@ -9,13 +9,13 @@
 - [ ] GPIO of onboard RGB LED and KEY button (marking/schematic)
 - [ ] Level of receiver signal (3.3/5 V) — is level shifting needed
 - [x] Are I2C pull-ups on BNO085 module (verified: working, Chinese module uses address 0x4B)
-- [ ] UART speed of NEO-M10N (default 38400 or 115200 — verify by echo)
+- [x] UART speed of NEO-M10N (verified: 38400 baud, NMEA protocol active)
 
 ## Firmware (per task)
 - [x] ESC: LEDC 50 Hz, 1000–2000 µs, neutral 1500
 - [x] Servo: ±45°
 - [x] Receiver: read 6 PWM channels
-- [x] GNSS: NMEA parse (basic implementation)
+- [x] GNSS: NMEA parse + UBX config injection (5Hz update rate, Sea dynamic model)
 - [x] IMU: BNO085 read (real data reading implemented, ARVR Stabilized RV, 20Hz, address 0x4B)
 - [x] Holding mode: control loop (PID structure implemented)
 
