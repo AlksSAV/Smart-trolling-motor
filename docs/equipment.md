@@ -1,7 +1,7 @@
 # Оборудование
 
 - Контроллер: ESP32-S3-N16R8 (WeAct Studio, 16МБ flash, 8МБ PSRAM, RGB LED, кнопки BOOT/RESET/KEY)
-- GNSS: u-blox NEO-M10N (UART)
+- GNSS: u-blox UBX-M10050 (чип M10, прошивка SPG 5.10, UART)
 - IMU: BNO085 (I2C)
 - ESC: brushless, bidirectional PWM 1000-2000 мкс, нейтраль 1500
 - Серва: цифровая PWM, 90 градусов (по 45 в каждую сторону), редуктор шестерня-вал

@@ -11,7 +11,7 @@ a servo, +/-45 deg from the centerline.
 |-----------|------|-----------|------|
 | MCU | ESP32-S3-N16R8 (16 MB flash, 8 MB PSRAM) | — | — |
 | IMU | BNO085 | I2C (400 kHz) | SDA 12, SCL 13 |
-| GNSS | u-blox NEO-M10N | UART1 | TX 17 -> GNSS RX, RX 18 <- GNSS TX |
+| GNSS | u-blox UBX-M10050 (M10, SPG 5.10) | UART1 (38400) | TX 17 -> GNSS RX, RX 18 <- GNSS TX |
 | ESC | brushless, bidirectional PWM | LEDC 50 Hz | GPIO 15 |
 | Steering servo | digital PWM, +/-45 deg | LEDC 50 Hz | GPIO 16 |
 | RC receiver | HotRC DS650 (6 ch) | GPIO input | 4-7, 10-11 (not integrated) |
@@ -20,8 +20,13 @@ Pin assignment: `docs/pinmap.md` (single source). Equipment registry: `docs/equi
 
 ## Verified facts (on real hardware)
 - BNO085 I2C address is `0x4B` (non-standard, typical for Chinese modules).
-- NEO-M10N runs at `38400 baud` (not 115200, not 9600).
-- UBX config applied: 5 Hz navigation rate + Sea dynamic model.
+- UBX-M10050 runs at `38400 baud` (not 115200, not 9600), firmware `ROM SPG 5.10 (7b202e)`.
+- Module configuration (read back with `tools/gnss_config.py`, saved RAM+BBR+Flash):
+  `measRate` 200 ms (5 Hz), `dynModel` SEA (5), NMEA output on UART1 only `GGA` + `RMC`.
+- Correction: earlier docs claimed "Sea dynamic model active"; the module actually
+  reported `dynModel 6 (AIR1)` until it was explicitly set to SEA on 2026-10-11.
+- Without a fix the module lowers its own rate to ~2.9-3.75 Hz (measured indoors);
+  the configured 5 Hz applies when a fix is present.
 - LEDC API (ESP32 Core v3.x): `ledcAttach(pin, freq, resolution)` + `ledcWrite(pin, duty)`.
 - PWM: 14-bit resolution (16384 steps), 50 Hz = 20 ms period.
 
@@ -62,7 +67,7 @@ for indoor testing).
 
 ## Control loop
 - IMU reads at 20 Hz.
-- GNSS reads at 5 Hz (UBX).
+- GNSS navigation solutions at 5 Hz (with a fix; the module drops to ~2.9-3.75 Hz without one).
 - Control calculations at 20 Hz.
 - Status display at 1 Hz.
 

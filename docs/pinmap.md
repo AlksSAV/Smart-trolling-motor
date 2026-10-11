@@ -26,8 +26,8 @@ Unassigned pins: "not verified" — no data, no numbers.
 | RC CH4 | 7 | GPIO input | |
 | RC CH5 | 10 | GPIO input | |
 | RC CH6 | 11 | GPIO input | |
-| GNSS NEO-M10N RX← | 17 | UART1 TX | ESP→GNSS |
-| GNSS NEO-M10N →RX | 18 | UART1 RX | GNSS→ESP |
+| GNSS UBX-M10050 RX← | 17 | UART1 TX | ESP→GNSS. 38400 baud (verified) |
+| GNSS UBX-M10050 →RX | 18 | UART1 RX | GNSS→ESP. 38400 baud (verified) |
 | IMU BNO085 SDA | 12 | I2C SDA | Pull-ups: verify module |
 | IMU BNO085 SCL | 13 | I2C SCL | Pull-ups: verify module |
 | RGB LED | not verified | — | Onboard LED, GPIO unknown |
@@ -36,6 +36,3 @@ Unassigned pins: "not verified" — no data, no numbers.
 Power is separate from the power part. Board powered from DC-DC with margin.
 All signals are 3.3 V level. 5 V devices (ESC, servo, receiver):
 level shifting question — open (see TODO).
-
-| GNSS NEO-M10N RX← | 17 | UART1 TX | ESP→GNSS. Скорость: 38400 бод (подтверждено) |
-| GNSS NEO-M10N →RX | 18 | UART1 RX | GNSS→ESP. Скорость: 38400 бод (подтверждено) |
