@@ -36,3 +36,6 @@ Unassigned pins: "not verified" — no data, no numbers.
 Power is separate from the power part. Board powered from DC-DC with margin.
 All signals are 3.3 V level. 5 V devices (ESC, servo, receiver):
 level shifting question — open (see TODO).
+
+| GNSS NEO-M10N RX← | 17 | UART1 TX | ESP→GNSS. Скорость: 38400 бод (подтверждено) |
+| GNSS NEO-M10N →RX | 18 | UART1 RX | GNSS→ESP. Скорость: 38400 бод (подтверждено) |
