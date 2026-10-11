@@ -1,104 +1,110 @@
 # CHANGELOG
-Dates are real. Status: "verified" — what was verified; otherwise — not verified.
+Даты реальные. Статус: «verified» — что проверено на железе; иначе — не проверено.
 
 ## [Unreleased]
-### Removed
-- Dead code: unused module classes (`esc_control`, `servo_control`, `gnss_module`, `imu_module`, `position_hold`) and `servo_test.cpp.bak`. `main.cpp` is self-contained; nothing referenced them.
-### Changed
-- Control calculation extracted into a single `computeControl()`; the control loop and the status display now share it (no duplicated logic).
-- ANCHOR_HOLD: on lost GNSS fix the outputs are forced to neutral and a warning is logged, instead of steering on a zero bearing. Mode is kept, so holding resumes when the fix returns.
-- Startup ESC/servo test gated behind `RUN_STARTUP_TEST` (0 by default) — no motor spin on reset. Set to 1 for bench testing.
-### Not verified
-- Build and hardware behavior not yet verified after these changes.
+### Удалено
+- Мёртвый код: неиспользуемые классы-модули (`esc_control`, `servo_control`, `gnss_module`, `imu_module`, `position_hold`) и `servo_test.cpp.bak`. `main.cpp` самодостаточен; на них никто не ссылался.
+### Изменено
+- Расчёт управления вынесен в общую функцию `computeControl()`; цикл управления и вывод статуса теперь используют её (дублирования нет).
+- ANCHOR_HOLD: при потере GNSS-фикса выходы принудительно в нейтраль и пишется предупреждение — вместо руления по нулевому азимуту. Режим сохраняется, поэтому при возврате фикса удержание продолжается.
+- Стартовый тест ESC/серво закрыт флагом `RUN_STARTUP_TEST` (0 по умолчанию) — мотор не дёргается при ресете. Для стендовой проверки поставить 1.
+### Проверено
+- Сборка: `pio run` успешно (RAM 8.4%, Flash 5.9%); прошито в ESP32-S3-N16R8 на COM23 (обнаружено 16 МБ flash, 8 МБ PSRAM).
+- На железе (только IMU + GNSS): переключение режимов M/H/S работает; IMU читает yaw и отслеживает поворот; GNSS-фикс с 10-11 спутниками на ~75-78 Гц NMEA.
+- Расчёт управления после рефакторинга совпадает с ожидаемым в логах (серво от ошибки курса; коэффициент скорости ESC падает до 50% при ошибке курса ≥90°).
+### Не проверено
+- Исполнительные механизмы (ESC и серво) при этом тесте не были подключены; значения PWM в логе — расчётные, не наблюдаемые. Ранее пользователь проверял движение серво/ESC на прежней прошивке — после рефакторинга не перепроверялось.
+- ANCHOR_HOLD с реальным GPS-фиксом (тестировалась только симуляция цели).
+- Защита от потери GNSS (фикс был валиден всё время теста).
 
-## [v0.3.1] - 2026-10-11 (ESC Test & Simulation Tuning)
-### Added
-- ESC test sequence in setup(): neutral → arm (1000us) → small throttle (1550us) → neutral
-- Servo test sequence: MIN (1000us) → NEUTRAL (1500us) → MAX (2000us) → NEUTRAL
-- Simulated anchor target distance increased from 5m to 9m for better ESC range testing
-### Verified
-- ESC PWM output verified on GPIO 15 (full range 1631-1759 us at 9m simulation)
-- Servo PWM output verified on GPIO 16 (full range 1000-2000 us)
-- ArduPilot Yaw Error Ratio working correctly: 50% speed at 90°+ heading error
-- State Machine transitions: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
+## [v0.3.1] - 2026-10-11 (тест ESC и настройка симуляции)
+### Добавлено
+- Тестовая последовательность ESC в setup(): нейтраль → арминг (1000 мкс) → малый газ (1550 мкс) → нейтраль
+- Тестовая последовательность серво: MIN (1000 мкс) → NEUTRAL (1500 мкс) → MAX (2000 мкс) → NEUTRAL
+- Дистанция симулированной цели якоря увеличена с 5 м до 9 м для лучшей проверки диапазона ESC
+### Проверено
+- Выход PWM ESC проверен на GPIO 15 (полный диапазон 1631-1759 мкс при симуляции 9 м)
+- Выход PWM серво проверен на GPIO 16 (полный диапазон 1000-2000 мкс)
+- Yaw Error Ratio ArduPilot работает корректно: 50% скорости при ошибке курса 90°+
+- Переходы конечного автомата: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
 
-## [v0.3.0] - 2026-10-11 (Full Integration: IMU + GNSS + Servo + ESC + ArduPilot Logic)
-### Added
-- Unified main.cpp with all subsystems: IMU, GNSS, LEDC outputs, State Machine
-- Real LEDC PWM output for Servo (GPIO 16) and ESC (GPIO 15) using ESP32 Core v3.x API
-- ArduPilot-inspired Loiter Logic: loiter radius, P-controller for speed, yaw error speed reduction
-- Bearing calculation for Anchor Hold mode
-- Simulated anchor target ('S' command) for indoor testing without GPS fix
-- getCurrentYaw() helper for clean code reuse
-### Changed
-- LEDC API updated to `ledcAttach()` + `ledcWrite()` (ESP32 Core v3.x compatible, 14-bit)
-- Control loop runs at 20 Hz, status display at 1 Hz
-- All code comments in English (per AGENTS.md)
-### Verified
-- Servo physical movement confirmed: responds to IMU yaw changes in real-time
-- ESC PWM output verified on GPIO 15 (neutral 1500us)
-- ArduPilot Yaw Error Ratio working: speed reduces at large heading errors (50% at 90°+)
-- State Machine transitions: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
-- GNSS UBX config: 5Hz + Sea mode active (~60 sentences/sec)
+## [v0.3.0] - 2026-10-11 (полная интеграция: IMU + GNSS + Servo + ESC + логика ArduPilot)
+### Добавлено
+- Единый main.cpp со всеми подсистемами: IMU, GNSS, выходы LEDC, конечный автомат
+- Реальный PWM-выход LEDC для серво (GPIO 16) и ESC (GPIO 15) через API ESP32 Core v3.x
+- Логика loiter в духе ArduPilot: радиус удержания, P-регулятор скорости, снижение скорости по ошибке курса
+- Расчёт азимута для режима Anchor Hold
+- Симулированная цель якоря (команда 'S') для тестов в помещении без GPS-фикса
+- Хелпер getCurrentYaw() для переиспользования кода
+### Изменено
+- API LEDC обновлён до `ledcAttach()` + `ledcWrite()` (совместимо с ESP32 Core v3.x, 14 бит)
+- Цикл управления 20 Гц, вывод статуса 1 Гц
+- Все комментарии в коде — на английском (по AGENTS.md)
+### Проверено
+- Физическое движение серво подтверждено: реагирует на изменение yaw IMU в реальном времени
+- Выход PWM ESC проверен на GPIO 15 (нейтраль 1500 мкс)
+- Yaw Error Ratio ArduPilot работает: скорость снижается при больших ошибках курса (50% при 90°+)
+- Переходы конечного автомата: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
+- UBX-конфиг GNSS: 5 Гц + режим Sea активны (~60 предложений/сек)
 
-## [v0.2.0] - 2026-10-11 (State Machine & Bearing)
-### Added
-- State Machine with 3 modes: `MODE_MANUAL`, `MODE_HEADING_HOLD`, `MODE_ANCHOR_HOLD`
-- Serial command interface for mode switching ('M', 'H', 'A')
-- Bearing calculation function for Anchor Hold (azimuth from current position to target)
-- Angle normalization helper for shortest-path rotation
-- Real-time error calculation for PID control (yaw error, heading error)
-- Protection against Anchor Hold activation without valid GNSS fix
-### Changed
-- Unified status output showing mode, IMU yaw, GNSS stats, and PID errors
-- Improved IMU initialization with retry logic and verbose logging
-### Verified
-- Heading Hold mode: target yaw locks correctly, error calculation works (tested ±17° deviation)
-- Mode transitions: Manual ↔ Heading Hold work seamlessly
-- GNSS UBX config: 5Hz + Sea mode active (~60 sentences/sec)
+## [v0.2.0] - 2026-10-11 (конечный автомат и азимут)
+### Добавлено
+- Конечный автомат с 3 режимами: `MODE_MANUAL`, `MODE_HEADING_HOLD`, `MODE_ANCHOR_HOLD`
+- Интерфейс команд по Serial для переключения режимов ('M', 'H', 'A')
+- Функция расчёта азимута для Anchor Hold (азимут от текущей позиции к цели)
+- Хелпер нормализации угла для кратчайшего поворота
+- Расчёт ошибок в реальном времени для PID-управления (ошибка курса, ошибка направления)
+- Защита от включения Anchor Hold без валидного GNSS-фикса
+### Изменено
+- Единый вывод статуса: режим, yaw IMU, статистика GNSS и ошибки PID
+- Улучшена инициализация IMU с логикой повторов и подробным логом
+### Проверено
+- Режим Heading Hold: целевой yaw фиксируется корректно, расчёт ошибки работает (проверено отклонение ±17°)
+- Переходы режимов: Manual ↔ Heading Hold работают без сбоев
+- UBX-конфиг GNSS: 5 Гц + режим Sea активны (~60 предложений/сек)
 
-## [v0.1.2] - 2026-10-11 (Sensors Verified & Optimized)
-### Added
-- Real BNO085 IMU data reading via I2C (GPIO 12/13).
-- Support for non-standard I2C address `0x4B` (Chinese BNO085 modules).
-- ARVR Stabilized Rotation Vector enabled at 20Hz for stable Yaw output.
-- Hybrid GNSS approach: UBX configuration commands sent at startup.
-- UBX-CFG-RATE: Increased navigation update rate to 5Hz (200ms) for smoother PID control.
-- UBX-CFG-NAV5: Set dynamic model to "Sea" (6) to filter out wave-induced position jumps.
-- Robust initialization with retry logic and power-up delays to prevent I2C/UART hangs.
-### Changed
-- Unified IMU + GNSS status output in `main.cpp` for easier debugging.
-- Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
-### Fixed
-- Resolved I2C initialization failures caused by simultaneous power-up spikes.
+## [v0.1.2] - 2026-10-11 (сенсоры проверены и оптимизированы)
+### Добавлено
+- Реальное чтение BNO085 по I2C (GPIO 12/13).
+- Поддержка нестандартного I2C-адреса `0x4B` (китайские модули BNO085).
+- ARVR Stabilized Rotation Vector включён на 20 Гц для стабильного yaw.
+- Гибридный подход GNSS: команды UBX-конфигурации отправляются при старте.
+- UBX-CFG-RATE: частота навигации увеличена до 5 Гц (200 мс) для более плавного PID.
+- UBX-CFG-NAV5: динамическая модель «Sea» (6) для фильтрации скачков позиции от волн.
+- Устойчивая инициализация с повторами и задержками питания против зависаний I2C/UART.
+### Изменено
+- Единый вывод статуса IMU + GNSS в `main.cpp` для удобства отладки.
+- Обновлены `TODO.md` и `CHANGELOG.md` под проверенный статус железа.
+### Исправлено
+- Устранены сбои инициализации I2C из-за одновременных скачков питания.
 
-## [v0.1.1] - 2026-10-11 (IMU Verified)
-### Added
-- Real BNO085 IMU data reading via I2C (GPIO 12/13).
-- Support for non-standard I2C address `0x4B` (typical for Chinese BNO085 modules).
-- ARVR Stabilized Rotation Vector enabled at 20Hz for stable Yaw/Pitch/Roll output.
-- `CORE_DEBUG_LEVEL=3` enabled in `build_flags` for Native USB debugging.
-### Changed
-- Replaced IMU stub with actual working implementation in `src/main.cpp`.
-- Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
+## [v0.1.1] - 2026-10-11 (IMU проверен)
+### Добавлено
+- Реальное чтение BNO085 по I2C (GPIO 12/13).
+- Поддержка нестандартного I2C-адреса `0x4B` (типично для китайских модулей BNO085).
+- ARVR Stabilized Rotation Vector включён на 20 Гц для стабильных yaw/pitch/roll.
+- `CORE_DEBUG_LEVEL=3` включён в `build_flags` для отладки по Native USB.
+### Изменено
+- Заглушка IMU заменена на реальную реализацию в `src/main.cpp`.
+- Обновлены `TODO.md` и `CHANGELOG.md` под проверенный статус железа.
 
 ## [v0.1.0] - 2026-10-11
-### Added
-- Base project structure with PlatformIO (ESP32-S3)
-- Modules: ESC Control, Servo Control, RC Receiver, GNSS Module, IMU Module, Position Hold
-- NMEA parser for NEO-M10N GNSS receiver
-- PID controller framework for position holding
-- Debug output via USB CDC (Serial)
-### Changed
-- Updated LEDC API to support ESP32 Arduino Core v3.x
-- Renamed modules for clarity (gnss -> gnss_module, imu -> imu_module)
-- Added Adafruit BNO08x library dependency
-### Fixed
-- Resolved compilation errors related to missing headers and deprecated functions
+### Добавлено
+- Базовая структура проекта на PlatformIO (ESP32-S3)
+- Модули: ESC Control, Servo Control, RC Receiver, GNSS Module, IMU Module, Position Hold
+- NMEA-парсер для GNSS NEO-M10N
+- Каркас PID-регулятора для удержания позиции
+- Отладочный вывод через USB CDC (Serial)
+### Изменено
+- API LEDC обновлён под ESP32 Arduino Core v3.x
+- Модули переименованы для ясности (gnss -> gnss_module, imu -> imu_module)
+- Добавлена зависимость от библиотеки Adafruit BNO08x
+### Исправлено
+- Устранены ошибки компиляции из-за отсутствующих заголовков и устаревших функций
 
 ## 2026-10-09
-- PlatformIO project: `platformio.ini` (env esp32s3: espressif32@6.10.0, arduino, board esp32-s3-devkitc-1 with N16R8 overrides), `src/main.cpp` (flash/PSRAM check). Not verified: build not run.
-- Documentation: `docs/pinmap.md` (pin assignment), `docs/platformio.md` (build, commands, verification steps).
+- Проект PlatformIO: `platformio.ini` (env esp32s3: espressif32@6.10.0, arduino, board esp32-s3-devkitc-1 с оверрайдами N16R8), `src/main.cpp` (проверка flash/PSRAM). Не проверено: сборка не запускалась.
+- Документация: `docs/pinmap.md` (карта пинов), `docs/platformio.md` (сборка, команды, шаги проверки).
 - `CHANGELOG.md`, `TODO.md`.
-- AGENTS.md: rule "code comments — English only."
-- Git: commit `959b2c1` — removed empty skeleton from init commit.
+- AGENTS.md: правило «комментарии в коде — только английский».
+- Git: коммит `959b2c1` — удалён пустой каркас из init-коммита.

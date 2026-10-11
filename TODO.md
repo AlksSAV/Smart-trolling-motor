@@ -18,9 +18,13 @@
 - [x] GNSS: NMEA parse + UBX config (5Hz, Sea model, ~60 sentences/sec)
 - [x] IMU: BNO085 read (ARVR Stabilized RV, 20Hz, address 0x4B)
 - [x] Holding mode: ArduPilot Loiter Logic (radius, yaw error speed reduction, cascaded PWM)
+- [x] Mode switching M/H/S + computeControl() verified on hardware (IMU + GNSS only, no actuators)
 
 ## Next Steps
+- [ ] Re-verify ESC/servo physical movement after refactor (actuators not connected now)
 - [ ] Test GNSS fix outdoors (verify real coordinates and bearing)
+- [ ] Test ANCHOR_HOLD with real GPS fix (only simulated target tested so far)
+- [ ] Test GNSS-loss guard in ANCHOR_HOLD (force fix loss)
 - [ ] Integrate RC receiver (HotRC DS650) for mode switching via PWM channels
 - [ ] Add reverse support (1000-1500 µs for backward motion)
 - [ ] Add dead zone around neutral (1480-1520 µs = neutral)
