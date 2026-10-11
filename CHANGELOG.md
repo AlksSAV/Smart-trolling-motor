@@ -1,6 +1,17 @@
 # CHANGELOG
 Dates are real. Status: "verified" — what was verified; otherwise — not verified.
 
+## [v0.3.1] - 2026-10-11 (ESC Test & Simulation Tuning)
+### Added
+- ESC test sequence in setup(): neutral → arm (1000us) → small throttle (1550us) → neutral
+- Servo test sequence: MIN (1000us) → NEUTRAL (1500us) → MAX (2000us) → NEUTRAL
+- Simulated anchor target distance increased from 5m to 9m for better ESC range testing
+### Verified
+- ESC PWM output verified on GPIO 15 (full range 1631-1759 us at 9m simulation)
+- Servo PWM output verified on GPIO 16 (full range 1000-2000 us)
+- ArduPilot Yaw Error Ratio working correctly: 50% speed at 90°+ heading error
+- State Machine transitions: Manual ↔ Heading Hold ↔ Anchor Hold (SIM)
+
 ## [v0.3.0] - 2026-10-11 (Full Integration: IMU + GNSS + Servo + ESC + ArduPilot Logic)
 ### Added
 - Unified main.cpp with all subsystems: IMU, GNSS, LEDC outputs, State Machine
