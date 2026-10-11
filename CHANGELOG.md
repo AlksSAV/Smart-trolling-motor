@@ -1,6 +1,16 @@
 # CHANGELOG
 Dates are real. Status: "verified" — what was verified; otherwise — not verified.
 
+## [Unreleased]
+### Removed
+- Dead code: unused module classes (`esc_control`, `servo_control`, `gnss_module`, `imu_module`, `position_hold`) and `servo_test.cpp.bak`. `main.cpp` is self-contained; nothing referenced them.
+### Changed
+- Control calculation extracted into a single `computeControl()`; the control loop and the status display now share it (no duplicated logic).
+- ANCHOR_HOLD: on lost GNSS fix the outputs are forced to neutral and a warning is logged, instead of steering on a zero bearing. Mode is kept, so holding resumes when the fix returns.
+- Startup ESC/servo test gated behind `RUN_STARTUP_TEST` (0 by default) — no motor spin on reset. Set to 1 for bench testing.
+### Not verified
+- Build and hardware behavior not yet verified after these changes.
+
 ## [v0.3.1] - 2026-10-11 (ESC Test & Simulation Tuning)
 ### Added
 - ESC test sequence in setup(): neutral → arm (1000us) → small throttle (1550us) → neutral

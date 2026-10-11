@@ -17,6 +17,10 @@
 #define ESC_PIN         15
 #define SERVO_PIN       16
 
+// Startup ESC/servo test sequence spins the motor. Keep 0 on the water:
+// set to 1 only for bench testing (causes motor jerk on every reset).
+#define RUN_STARTUP_TEST 0
+
 // ============================================================
 // Global Objects
 // ============================================================
@@ -134,7 +138,21 @@ float getCurrentYaw() {
     return yaw;
 }
 
+// ============================================================
+// Control Output (shared by control loop and status display)
+// ============================================================
+struct ControlState {
+    float distance;      // m (ANCHOR_HOLD only)
+    float bearing;       // deg (ANCHOR_HOLD only)
+    float headingError;  // deg (HEADING_HOLD: yaw error)
+    float yawErrorRatio; // 1.0 .. 0.5 (ANCHOR_HOLD only)
+    int escPWM;          // us
+    int servoPWM;        // us
+    bool gnssLost;       // ANCHOR_HOLD: no valid GNSS fix, outputs forced neutral
+};
+
 void processSerialCommands();
+ControlState computeControl(float currentYaw);
 void calculateAndApplyControl();
 void displaySystemStatus();
 
@@ -203,7 +221,8 @@ void setup() {
     ledcAttach(ESC_PIN, LEDC_FREQ, LEDC_RESOLUTION);
     ledcAttach(SERVO_PIN, LEDC_FREQ, LEDC_RESOLUTION);
 
-    // --- 5. ESC TEST SEQUENCE ---
+#if RUN_STARTUP_TEST
+    // --- 5. ESC TEST SEQUENCE (bench only) ---
     Serial.println("\n========================================");
     Serial.println("  ESC TEST SEQUENCE");
     Serial.println("  Listen for ESC beeps!");
@@ -259,6 +278,12 @@ void setup() {
     Serial.println("  TEST COMPLETE");
     Serial.println("  Starting normal operation...");
     Serial.println("========================================\n");
+#else
+    // Safe start: hold both outputs at neutral, no motor spin.
+    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
+    Serial.println("[SAFE START] ESC/Servo neutral (startup test disabled)");
+#endif
 
     // --- 6. Print help ---
     Serial.println(">>> Serial Commands:");
@@ -346,67 +371,73 @@ void processSerialCommands() {
 // ============================================================
 // ArduPilot-inspired Control Logic
 // ============================================================
-void calculateAndApplyControl() {
-    if (!imu_ready) return;
-
-    float currentYaw = getCurrentYaw();
-    int escPWM = ESC_NEUTRAL_US;
-    int servoPWM = SERVO_NEUTRAL_US;
+ControlState computeControl(float currentYaw) {
+    ControlState out;
+    out.distance = 0.0;
+    out.bearing = 0.0;
+    out.headingError = 0.0;
+    out.yawErrorRatio = 1.0;
+    out.escPWM = ESC_NEUTRAL_US;
+    out.servoPWM = SERVO_NEUTRAL_US;
+    out.gnssLost = false;
 
     if (currentMode == MODE_MANUAL) {
-        escPWM = ESC_NEUTRAL_US;
-        servoPWM = SERVO_NEUTRAL_US;
+        // ESC and servo stay at neutral
     }
     else if (currentMode == MODE_HEADING_HOLD) {
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);
+        out.headingError = yawError;
         float servoDev = constrainFloat(yawError * SERVO_P_GAIN,
                                          -(SERVO_NEUTRAL_US - SERVO_MIN_US),
                                          (SERVO_MAX_US - SERVO_NEUTRAL_US));
-        servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
-        escPWM = ESC_NEUTRAL_US;
+        out.servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
     }
     else if (currentMode == MODE_ANCHOR_HOLD) {
-        float distance = 0.0;
-        float bearing = 0.0;
+        // No valid fix (and not simulating): hold safe neutral instead of
+        // steering on garbage bearing. ESC/servo already neutral.
+        if (!isSimulatedTarget && !gps.location.isValid()) {
+            out.gnssLost = true;
+            return out;
+        }
 
         if (isSimulatedTarget) {
-            distance = 9.0;  // ИЗМЕНЕНО с 5.0 на 9.0
-            bearing = 90.0;
+            out.distance = 9.0;
+            out.bearing = 90.0;
         } else if (gps.location.isValid()) {
-            distance = gps.distanceBetween(
+            out.distance = gps.distanceBetween(
                 gps.location.lat(), gps.location.lng(),
                 targetLat, targetLon);
-            bearing = calculateBearing(
+            out.bearing = calculateBearing(
                 gps.location.lat(), gps.location.lng(),
                 targetLat, targetLon);
         }
 
-        float headingError = normalizeAngleDiff(bearing, currentYaw);
-        float yawErrorRatio = 1.0 - (constrainFloat(fabsf(headingError), 0.0, 90.0) / 90.0) * 0.5;
+        out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
+        out.yawErrorRatio = 1.0 - (constrainFloat(fabsf(out.headingError), 0.0, 90.0) / 90.0) * 0.5;
 
-        if (distance > LOITER_RADIUS_M) {
-            float distanceError = distance - LOITER_RADIUS_M;
+        if (out.distance > LOITER_RADIUS_M) {
+            float distanceError = out.distance - LOITER_RADIUS_M;
             float speedFactor = constrainFloat(
                 distanceError / (MAX_DISTANCE_M - LOITER_RADIUS_M), 0.0, 1.0);
-            float effectiveSpeed = speedFactor * yawErrorRatio;
-
-            escPWM = ESC_NEUTRAL_US + (int)(effectiveSpeed * (ESC_MAX_FORWARD_US - ESC_NEUTRAL_US));
-
-            float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
-                                             -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                             (SERVO_MAX_US - SERVO_NEUTRAL_US));
-            servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
-        } else {
-            escPWM = ESC_NEUTRAL_US;
-            float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
-                                             -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                             (SERVO_MAX_US - SERVO_NEUTRAL_US));
-            servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
+            float effectiveSpeed = speedFactor * out.yawErrorRatio;
+            out.escPWM = ESC_NEUTRAL_US + (int)(effectiveSpeed * (ESC_MAX_FORWARD_US - ESC_NEUTRAL_US));
         }
+
+        float servoDev = constrainFloat(out.headingError * SERVO_P_GAIN,
+                                         -(SERVO_NEUTRAL_US - SERVO_MIN_US),
+                                         (SERVO_MAX_US - SERVO_NEUTRAL_US));
+        out.servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
     }
 
-    ledcWrite(ESC_PIN, usToDuty(escPWM));
-    ledcWrite(SERVO_PIN, usToDuty(servoPWM));
+    return out;
+}
+
+void calculateAndApplyControl() {
+    if (!imu_ready) return;
+
+    ControlState ctrl = computeControl(getCurrentYaw());
+    ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
+    ledcWrite(SERVO_PIN, usToDuty(ctrl.servoPWM));
 }
 
 // ============================================================
@@ -438,47 +469,20 @@ void displaySystemStatus() {
                   hz, gps.satellites.value(),
                   gps.location.isValid() ? "YES" : "NO");
 
-    if (currentMode == MODE_HEADING_HOLD && imu_ready) {
-        float yawError = normalizeAngleDiff(targetYaw, currentYaw);
-        float servoDev = constrainFloat(yawError * SERVO_P_GAIN,
-                                         -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                         (SERVO_MAX_US - SERVO_NEUTRAL_US));
-        int servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
-        Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | Servo: %4d us\n",
-                      targetYaw, yawError, servoPWM);
-    }
-    else if (currentMode == MODE_ANCHOR_HOLD && imu_ready) {
-        float distance = isSimulatedTarget ? 9.0 :  // ИЗМЕНЕНО с 5.0 на 9.0
-            (gps.location.isValid() ?
-                gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0);
-        float bearing = isSimulatedTarget ? 90.0 :
-            (gps.location.isValid() ?
-                calculateBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0);
-        float headingError = normalizeAngleDiff(bearing, currentYaw);
-        float yawErrorRatio = 1.0 - (constrainFloat(fabsf(headingError), 0.0, 90.0) / 90.0) * 0.5;
+    if (imu_ready && (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD)) {
+        ControlState ctrl = computeControl(currentYaw);
 
-        int escPWM = ESC_NEUTRAL_US;
-        int servoPWM = SERVO_NEUTRAL_US;
-
-        if (distance > LOITER_RADIUS_M) {
-            float speedFactor = constrainFloat(
-                (distance - LOITER_RADIUS_M) / (MAX_DISTANCE_M - LOITER_RADIUS_M), 0.0, 1.0);
-            escPWM = ESC_NEUTRAL_US + (int)(speedFactor * yawErrorRatio * (ESC_MAX_FORWARD_US - ESC_NEUTRAL_US));
-            float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
-                                             -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                             (SERVO_MAX_US - SERVO_NEUTRAL_US));
-            servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
+        if (currentMode == MODE_HEADING_HOLD) {
+            Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | Servo: %4d us\n",
+                          targetYaw, ctrl.headingError, ctrl.servoPWM);
+        } else if (ctrl.gnssLost) {
+            Serial.println("[WARN] ANCHOR HOLD: no GNSS fix - ESC/Servo neutral");
         } else {
-            float servoDev = constrainFloat(headingError * SERVO_P_GAIN,
-                                             -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                             (SERVO_MAX_US - SERVO_NEUTRAL_US));
-            servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
+            Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | HeadErr: %6.1f\n",
+                          ctrl.distance, ctrl.bearing, ctrl.headingError);
+            Serial.printf("[OUT] ESC: %4d us | Servo: %4d us | SpeedRatio: %.0f%%\n",
+                          ctrl.escPWM, ctrl.servoPWM, ctrl.yawErrorRatio * 100.0);
         }
-
-        Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | HeadErr: %6.1f\n",
-                      distance, bearing, headingError);
-        Serial.printf("[OUT] ESC: %4d us | Servo: %4d us | SpeedRatio: %.0f%%\n",
-                      escPWM, servoPWM, yawErrorRatio * 100.0);
     }
 
     Serial.println("----------------------------------------\n");

@@ -17,11 +17,6 @@ PlatformIO, env `esp32s3`.
 - Изменения: [CHANGELOG.md](CHANGELOG.md)
 
 ## Структура кода
+- `src/main.cpp` — точка входа: IMU (BNO085), GNSS (NEO-M10N), LEDC PWM для ESC и серво, конечный автомат режимов и логика удержания
 - `src/config.h` — конфигурация пинов и параметров
-- `src/esc_control.*` — управление тягой мотора
-- `src/servo_control.*` — управление углом поворота
-- `src/rc_receiver.*` — чтение сигналов с пульта HotRC DS650
-- `src/gnss_module.*` — парсинг NMEA данных с NEO-M10N
-- `src/imu_module.*` — работа с компасом BNO085
-- `src/position_hold.*` — алгоритм удержания позиции (PID)
-- `src/main.cpp` — точка входа и интеграция модулей
+- `src/rc_receiver.*` — чтение сигналов с пульта HotRC DS650 (каркас, в прошивку пока не интегрирован)

@@ -1,22 +1,31 @@
 # PlatformIO: build and flashing
 
-## Environment (verified on 2026-10-10)
+## Environment (verified on 2026-10-11)
 
 - PlatformIO Core 6.2.0 (`python -m platformio --version`), Python 3.12.4
 - Platform `espressif32@55.3.311` (Espressif official, esptool v5.x)
-- Framework `arduino @ 3.3.8` (resolved from `framework-arduinoespressif32@3.3.8`)
-- `pio` is available in PATH (updated from 6.1.19)
+- Framework `arduino` resolved to `framework-arduinoespressif32@3.3.11`
+  (+ `framework-arduinoespressif32-libs@5.5.5`)
+- Toolchain `toolchain-xtensa-esp-elf@14.2.0`, `tool-esptoolpy@5.3.0`
 - ESP32-S3-N16R8 connected on COM23
-- Build: success, no packages downloaded (all present on disk)
+- Build: success (see Build status)
+
+> 2026-10-11: the `~/.platformio/penv` virtualenv was corrupted (missing
+> `pyvenv.cfg`, no pip) and PlatformIO failed with
+> `uv installation via pip failed with exit code 106`. Fix: delete
+> `~/.platformio/penv`; PlatformIO recreates it on the next run. Packages in
+> `~/.platformio/packages` are not affected. After recreation the framework
+> resolved to 3.3.11 (previously 3.3.8).
 
 ## Version drift policy
 
-`platformio.ini` pins platform and framework versions. Pins are maintained in
-this file and verified against the installed environment.
+`platformio.ini` pins the platform version. The framework is **not** pinned
+(`framework = arduino`, no `@version`): PlatformIO resolves it from the
+installed framework package, so it can drift when the environment is recreated.
 
 ```ini
 platform = espressif32 @ 55.3.311
-framework = arduino @ 3.3.8
+framework = arduino
 ```
 
 Platform 55.x is Espressif's official PlatformIO package (espressif/openocd-esp32
@@ -24,13 +33,12 @@ v5.x, esptool v5.x). Platform 6.x is community-maintained and has been reported
 to fail on Windows with `esptool.exe` "SyntaxError: unexpected EOF while parsing"
 when reading the chip bootloader; 55.x does not have that failure.
 
-`arduino @ 3.3.8` is the framework core version actually resolved by PlatformIO.
-`framework-arduinoespressif32@3.3.3` may still be present on disk as an unused
-package; the active build uses 3.3.8 (see the global package storage
-`platformio-pkgstate.json`). Do not assume the on-disk directory listing reflects
-the version used by a given build — check the build state.
+The framework core version actually resolved by PlatformIO is recorded in the
+Environment section above; it changed from 3.3.8 to 3.3.11 when `penv` was
+recreated. Do not assume the on-disk directory listing reflects the version used
+by a given build — check the build state.
 
-When bumping either pin, update this file, run `pio run`, and verify the
+When bumping the platform pin, update this file, run `pio run`, and verify the
 board still boots and the serial monitor works.
 
 ## Commands
@@ -105,10 +113,13 @@ verify board marking.
 
 ## Build status
 
-Build succeeded on 2026-10-10:
-- `pio run` — RAM 1.3% (4544 B), Flash 4% (287805 B)
-- No packages downloaded, all present on disk
-- `esptool.py v4.12.0` invoked with `--flash_size detect`
+Build succeeded on 2026-10-11:
+- `pio run` — RAM 8.4% (27572 B), Flash 5.9% (387859 B)
+- App size shown against 6553600 B (6400 KB) — `default_16MB.csv` `app0` applied
+- `esptool v5.3.0` invoked with `--flash-size 16MB`
+- Sources compiled: `src/main.cpp`, `src/rc_receiver.cpp`
+
+Earlier build (2026-10-10): RAM 1.3% (4544 B), Flash 4% (287805 B).
 
 ## Not verified
 
