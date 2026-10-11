@@ -32,11 +32,17 @@ Dates are real. Status: "verified" — what was verified; otherwise — not veri
 - Replaced IMU stub with actual working implementation in `src/main.cpp`.
 - Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
 
-## [v0.1.2] - 2026-10-11 (GNSS Optimized)
+## [v0.1.2] - 2026-10-11 (Sensors Verified & Optimized)
 ### Added
+- Real BNO085 IMU data reading via I2C (GPIO 12/13).
+- Support for non-standard I2C address `0x4B` (Chinese BNO085 modules).
+- ARVR Stabilized Rotation Vector enabled at 20Hz for stable Yaw output.
 - Hybrid GNSS approach: UBX configuration commands sent at startup.
 - UBX-CFG-RATE: Increased navigation update rate to 5Hz (200ms) for smoother PID control.
 - UBX-CFG-NAV5: Set dynamic model to "Sea" (6) to filter out wave-induced position jumps.
-- Automatic UBX checksum calculation helper (`sendUBX`).
+- Robust initialization with retry logic and power-up delays to prevent I2C/UART hangs.
 ### Changed
 - Unified IMU + GNSS status output in `main.cpp` for easier debugging.
+- Updated `TODO.md` and `CHANGELOG.md` to reflect verified hardware status.
+### Fixed
+- Resolved I2C initialization failures caused by simultaneous power-up spikes.
