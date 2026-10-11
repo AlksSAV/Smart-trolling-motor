@@ -17,18 +17,47 @@
 5. **Спросить, если неясно.** Один вопрос дешевле переделки всего, что построено поверх догадки.
 6. **Пользователь знает своё железо.** Его слова о плате — данные, а не мнение. Спорить только с выводом прибора.
 7. **Кратко.** Без вступлений, итогов и пересказа того, что уже есть в файлах проекта.
+8. **Документация = реальность.** TODO.md и CHANGELOG.md должны отражать только проверенные факты. Не отмечать выполненным то, что не верифицировано на железе.
 
 ## Каталог проекта
-
-```
-D:\Troll Motor        <- репозиторий, ветка main
-```
+D:\Troll Motor <- репозиторий, ветка main
 
 Каждая команда — с абсолютным путём. Относительные пути разрешаются не в проект.
 
 ## Железо и пины
 
-Единственный реестр — `docs/equipment.md`. Числа живут там, здесь не дублируются.
+Единственный репозиторий пинов — `docs/pinmap.md`. Реестр оборудования — `docs/equipment.md`.
+
+### Ключевые компоненты
+- **MCU**: ESP32-S3-N16R8 (16MB Flash, 8MB PSRAM)
+- **IMU**: BNO085 (I2C, GPIO 12/13)
+- **GNSS**: NEO-M10N (UART1, GPIO 17/18)
+- **ESC**: Motor controller (GPIO 15, PWM 50Hz)
+- **Servo**: Steering (GPIO 16, PWM 50Hz)
+- **RC Receiver**: HotRC DS650 (6 PWM channels, GPIO 4-7, 10-11) — future integration
+
+## Проверенные факты
+
+Эти данные верифицированы на реальном железе:
+- BNO085 использует I2C-адрес `0x4B` (нестандартный, типично для китайских модулей)
+- NEO-M10N работает на скорости `38400 baud` (не 115200, не 9600)
+- UBX-конфигурация применяется: 5Hz navigation rate + Sea dynamic model
+- LEDC API ESP32 Core v3.x: `ledcAttach(pin, freq, resolution)` + `ledcWrite(pin, duty)`
+- 14-bit resolution для PWM (16384 steps), 50Hz = 20ms period
+
+## Архитектура
+
+### State Machine
+Три режима работы:
+- **MODE_MANUAL**: RC receiver controls ESC and servo directly (future)
+- **MODE_HEADING_HOLD**: IMU maintains current yaw, servo active, ESC neutral
+- **MODE_ANCHOR_HOLD**: GNSS maintains position, both ESC and servo active
+
+### ArduPilot Loiter Logic
+- Loiter radius: 2.0m (dead zone)
+- P-controller for speed based on distance
+- Yaw error speed reduction: 50% speed at 90+ deg heading error
+- Bearing calculation for target direction
 
 ## Git
 
@@ -43,3 +72,4 @@ D:\Troll Motor        <- репозиторий, ветка main
 - Заглушки с выдуманным содержимым вместо пустого раздела.
 - Сборка, прошивка, установка пакетов без команды.
 - Заявлять выполненным то, что не проверено.
+- Изменять проверенные факты (адреса, скорости, пины) без явного подтверждения пользователя.
