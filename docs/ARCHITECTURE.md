@@ -53,18 +53,44 @@ Pin assignment: `docs/pinmap.md` (single source). Equipment registry: `docs/equi
 
 ## Software
 
-All firmware is in `src/main.cpp` (self-contained).
+Main firmware in `src/main.cpp` (self-contained). Heading EKF in `src/ekf_heading.h/.cpp`.
 
 ### Operating modes
 1. **MANUAL** — ESC and servo at neutral. (RC control is a future task.)
-2. **HEADING_HOLD** — IMU holds the current yaw. The servo turns fully (+/-90 deg) to
-   the side of the heading error, ESC thrust (forward only) grows with the error.
+2. **HEADING_HOLD** — the boat is under way and holds its course. The servo turns
+   fully (+/-90 deg) to the side of the heading error, ESC thrust (forward only)
+   grows with the error. Not a standstill mode.
 3. **ANCHOR_HOLD** — GNSS holds the position; both ESC and servo active, thrust
    forward or reverse.
 
 Mode is switched by serial command: `M` (manual), `H` (heading hold),
 `A` (anchor hold, requires a GNSS fix), `S` (anchor hold with a simulated target
-for indoor testing).
+for indoor testing). `L` toggles the 20 Hz CSV tuning log (prefix `LOG,`).
+
+### Heading EKF (2 states)
+
+State: `[yaw, gyro_bias]` — heading и накопленный дрейф магнитометра (deg/s).
+Матрицы 2×2 написаны вручную, без зависимостей. Источники: `src/ekf_heading.h/.cpp`.
+
+| Параметр | Значение (заглушка) |
+|----------|-------------------|
+| `qYawDeg2` | 0.001 |
+| `qBiasDeg2PerS2` | 1e-5 |
+| `rCOG` | 10° (1-sigma) |
+| COG speed threshold | 0.3 m/s |
+| Innovation gate | 60° |
+
+**Принцип работы:**
+- `predict()` на каждый вектор поворота IMU (20 Гц): `yaw += delta_yaw - bias * dt`.
+- `correct()` на каждое решение GNSS (5 Гц): подаётся **только COG** из RMC.
+  - Bearing к цели — не measurement heading, игнорируется.
+  - COG отбрасывается: скорость < 0.3 м/с; ANCHOR_HOLD + реверс (COG указывает на 180° от носа).
+- Первое измерение `seedHeading()`: yaw жёстко ставится в рамку GNSS (истинный север). Bias не трогается, на следующих циклах коррекция сходится.
+- Gate 60°: измерения дальше отклоняются, счётчик в CSV-логе.
+
+**Тюнинг Q/R** — не сделан. Требуется CSV-лог (`L`) и анализ на ПК.
+
+> **Статус:** не проверено. Скомпилировано (`pio run` — RAM 8.4%, Flash 6.0%), но плата недоступна. Не запускать на воде до подбора Q/R.
 
 ### Control parameters (`src/main.cpp`)
 | Parameter | Value |
@@ -120,14 +146,20 @@ HEADING_HOLD values are starting values, not tuned.
 - IMU reads at 20 Hz.
 - GNSS navigation solutions at 5 Hz (`measRate` 200 ms stored in module Flash).
 - Control calculations at 20 Hz.
+- EKF `predict()` on each IMU rotation vector; `correct()` on each valid COG (5 Hz when moving).
 - Status display at 1 Hz.
 
 ## Future
+- **EKF tuning:** collect CSV log (`L`) on the water, fit Q/R with `tools/log_parse.py`
+  (parser not written yet). Current Q/R are placeholders.
+- EKF: verify `seedHeading` on the first COG (true-north frame). On standstill the
+  constant heading offset remains — no COG, no correction.
 - RC receiver integration (mode switching, manual control; 1000-1500 us = reverse,
   1500-2000 us = forward).
-- Magnetic declination: yaw from the BNO085 is referenced to magnetic north (per the
-  report description), GNSS bearing to true north; no correction is applied yet.
-  The yaw direction against a compass is now verified (counter-clockwise, mirrored
-  by `getCurrentHeading()`), but the constant offset is not determined.
+- Magnetic declination: `seedHeading` puts the heading into the true-north frame on
+  the first valid COG, but the offset is not separated into mounting, declination
+  and magnetometer bias, and it is not available at standstill. The yaw direction
+  against a compass is verified (counter-clockwise, mirrored by
+  `getCurrentHeading()`), the constant offset is not determined.
 - Full PID tuning for boat dynamics.
 - OLED telemetry display.

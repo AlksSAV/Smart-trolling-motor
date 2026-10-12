@@ -20,6 +20,15 @@
 - [x] IMU: BNO085 read (ARVR Stabilized RV, 20Hz, address 0x4B)
 - [x] Holding mode: ArduPilot Loiter Logic (радиус 2 м, скорость по дистанции; снижение скорости по ошибке курса убрано 2026-10-12 — вместо него реверс)
 - [x] Mode switching M/H/S + computeControl() verified on hardware (IMU + GNSS only, no actuators)
+- [x] EKF skeleton: heading EKF fuses BNO085 yaw with GNSS COG, 2 states `[yaw, gyro_bias]` (2026-10-12, compiled only, not on hardware)
+
+## EKF (unverified)
+- [ ] `pio run` + прошивка на плату — убедиться, что EKF не падает и не дёргает выходы на старте
+- [ ] В помещении: вращать плату, смотреть `fused yaw` vs `raw heading` — bias не должен дрейфовать без GNSS
+- [ ] На воде: собрать CSV-лог (`L`), подобрать `Q` и `R` через `tools/log_parse.py`
+- [ ] Проверить seed-выравнивание при первом COG: `fused yaw` должен попасть в рамку истинного севера (±5°)
+- [ ] Проверить rejection при реверсе и на малых скоростях
+- [ ] Проверить поведение при потере GNSS (bias не должен расползаться)
 
 ## Next Steps
 - [x] GNSS: power-cycle — конфигурация (measRate 200, SEA, GGA+RMC) сохраняется во Flash (2026-10-12)
