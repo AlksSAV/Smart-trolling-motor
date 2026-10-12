@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_BNO08x.h>
 #include <TinyGPSPlus.h>
+#include "ekf_heading.h"
 
 // ============================================================
 // Hardware Pin Assignment (see docs/pinmap.md)
@@ -38,6 +39,28 @@ HardwareSerial gnssSerial(1);
 TinyGPSPlus gps;
 const unsigned long GNSS_BAUD = 38400;
 uint32_t parsed_sentences = 0;
+
+// Heading EKF — fused heading output.
+EkfHeading headingEKF;
+// Last IMU increment (for the logger).
+float lastRawHeadingDeg = 0.0f;
+bool  haveLastRawHeading = false;
+unsigned long lastRawHeadingMs = 0;
+float lastImuDeltaYawDeg = 0.0f;
+float lastImuDtSec       = 0.0f;
+// EKF tuning / policy constants.
+// COG speed threshold below which COG is ignored (m/s).
+const float GNSS_MIN_COG_MS  = 0.3f;
+// 1-sigma of COG as a heading measurement (placeholder, tune from log).
+const float EKF_R_COG_DEG    = 10.0f;
+// Innovation gate: reject measurements further than this from the estimate.
+const float EKF_INNOV_GATE_DEG = 60.0f;
+// Counter for rejected measurements (diagnostic).
+uint32_t ekfRejectedCount = 0;
+// Last innovation for logging (both accepted and rejected).
+float lastEkfInnovDeg = 0.0f;
+// CSV tuning log: enabled by 'L' command.
+bool logTuningEnabled = false;
 
 // ============================================================
 // State Machine
@@ -177,6 +200,60 @@ float getCurrentYaw() {
 // applied yet: it cannot be separated from magnetic distortion indoors.
 float getCurrentHeading() {
     return fmod((360.0 - getCurrentYaw()), 360.0);
+}
+
+// Fused heading from the EKF. Before the first GNSS correction the filter
+// output equals the raw IMU heading, so this is safe to use everywhere.
+float getFusedHeading() {
+    return headingEKF.heading();
+}
+
+// Called on every new rotation vector: integrate the raw heading increment.
+void updateEkfFromImu(float rawHeadingDeg, unsigned long nowMs) {
+    if (haveLastRawHeading) {
+        float dt = (nowMs - lastRawHeadingMs) / 1000.0f;
+        if (dt > 0.0f) {
+            lastImuDeltaYawDeg = normalizeAngleDiff(rawHeadingDeg, lastRawHeadingDeg);
+            lastImuDtSec = dt;
+            headingEKF.predict(lastImuDeltaYawDeg, dt);
+        }
+    }
+    lastRawHeadingDeg = rawHeadingDeg;
+    lastRawHeadingMs  = nowMs;
+    haveLastRawHeading = true;
+}
+
+// Called once per GNSS solution (5 Hz). Feeds the EKF a heading measurement.
+// The ONLY valid GNSS heading measurement is COG (Course Over Ground), and only
+// when the boat is actually moving. Bearing to target is NOT a heading measurement:
+// it is the direction from the boat to the anchor, which tells nothing about the
+// boat's heading. At standstill there is no valid GNSS heading measurement.
+// When thrust is reversed (ANCHOR_HOLD), COG points 180 deg from the bow: skip.
+void updateEkfFromGnss() {
+    if (!imuHasData) return;
+    if (!gps.course.isValid() || !gps.speed.isValid()) return;
+
+    float speedMs = gps.speed.mps();
+    if (speedMs < GNSS_MIN_COG_MS) return;
+
+    // Reverse thrust: COG points where the boat moves, not where the bow points.
+    if (currentMode == MODE_ANCHOR_HOLD && thrustReversed) return;
+
+    float cog = gps.course.deg();
+    float innov = normalizeAngleDiff(cog, headingEKF.heading());
+    lastEkfInnovDeg = innov;
+
+    if (!headingEKF.hasUpdate()) {
+        // Not yet aligned. Seed the estimate to the measurement and try again
+        // next cycle. After two or three cycles the innovation falls within the
+        // gate and correct() marks the filter converged.
+        headingEKF.seedHeading(cog);
+    } else if (fabsf(innov) > EKF_INNOV_GATE_DEG) {
+        // Outlier: bad fix or aggressive maneuver. Reject.
+        ekfRejectedCount++;
+    } else {
+        headingEKF.correct(cog, EKF_R_COG_DEG);
+    }
 }
 
 bool imuStale() {
@@ -326,6 +403,19 @@ void loop() {
             sensorValue.sensorId == SH2_ARVR_STABILIZED_RV) {
             lastImuEventMs = millis();
             imuHasData = true;
+
+            // Lazy init: begin EKF on first valid IMU data.
+            static bool ekfInitialized = false;
+            if (!ekfInitialized) {
+                headingEKF.begin(getCurrentHeading());
+                lastRawHeadingDeg = getCurrentHeading();
+                lastRawHeadingMs = millis();
+                haveLastRawHeading = true;
+                ekfInitialized = true;
+            }
+
+            // EKF predict step.
+            updateEkfFromImu(getCurrentHeading(), millis());
         }
     }
 
@@ -333,6 +423,11 @@ void loop() {
         if (gps.encode(gnssSerial.read())) {
             parsed_sentences++;
         }
+    }
+
+    // EKF correct step on every new GNSS solution.
+    if (gps.course.isUpdated()) {
+        updateEkfFromGnss();
     }
 
     processSerialCommands();
@@ -372,7 +467,7 @@ void processSerialCommands() {
         }
         currentMode = MODE_HEADING_HOLD;
         isSimulatedTarget = false;
-        targetYaw = getCurrentHeading();
+        targetYaw = getFusedHeading();
         Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg\n", targetYaw);
     }
     else if (cmd == 'A') {
@@ -394,6 +489,10 @@ void processSerialCommands() {
         targetLat = 55.7558;
         targetLon = 37.6173;
         Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED). Target: 9m at 90 deg");
+    }
+    else if (cmd == 'L') {
+        logTuningEnabled = !logTuningEnabled;
+        Serial.printf("\n[LOG] Tuning CSV %s\n", logTuningEnabled ? "ON" : "OFF");
     }
 }
 
@@ -484,9 +583,28 @@ ControlState computeControl(float currentYaw) {
 void calculateAndApplyControl() {
     // computeControl() returns neutral when the IMU is stale or missing,
     // so outputs are always written (never left at the last value).
-    ControlState ctrl = computeControl(imuStale() ? 0.0 : getCurrentHeading());
+    ControlState ctrl = computeControl(imuStale() ? 0.0 : getFusedHeading());
     ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
     ledcWrite(SERVO_PIN, usToDuty(ctrl.servoPWM));
+
+    // CSV tuning log at 20 Hz (only when enabled).
+    if (logTuningEnabled && imuHasData && haveLastRawHeading) {
+        Serial.printf("LOG,%lu,%d,%6.1f,%6.1f,%5.2f,%lu,%d,%d,%.1f,%.2f,%.6f,%.6f,%.1f,%.1f,%6.1f,%6.3f,%6.1f,%u\n",
+            millis(), currentMode,
+            getCurrentHeading(), lastImuDeltaYawDeg, lastImuDtSec, millis() - lastImuEventMs,
+            gps.location.isValid() ? 1 : 0, gps.satellites.value(),
+            (gps.course.isValid() && gps.speed.isValid()) ? gps.course.deg() : 0.0f,
+            (gps.speed.isValid()) ? gps.speed.mps() : 0.0f,
+            gps.location.lat(), gps.location.lng(),
+            (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
+                ? gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
+            (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
+                ? calculateBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
+            headingEKF.heading(),
+            headingEKF.biasDegPerSec(),
+            lastEkfInnovDeg,
+            ekfRejectedCount);
+    }
 }
 
 // ============================================================
@@ -523,7 +641,7 @@ void displaySystemStatus() {
                   gps.location.isValid() ? "YES" : "NO");
 
     if (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD) {
-        ControlState ctrl = computeControl(currentHeading);
+        ControlState ctrl = computeControl(getFusedHeading());
 
         if (ctrl.imuLost) {
             Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
