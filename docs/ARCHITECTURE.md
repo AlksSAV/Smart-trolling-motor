@@ -29,6 +29,20 @@ Pin assignment: `docs/pinmap.md` (single source). Equipment registry: `docs/equi
 - The firmware does not write to the GNSS module. Earlier firmware re-sent legacy
   `UBX-CFG-RATE` / `UBX-CFG-NAV5` (with `dynModel 6` = AIR1) on every boot; that
   masked the real state (Flash had no `measRate`, RAM showed AIR1). Removed.
+- BNO085 yaw grows counter-clockwise; GNSS bearing and servo angle grow clockwise.
+  Verified on hardware 2026-10-12: one full clockwise turn gave -360 deg of yaw
+  (N 117.8, E 36.8, S 293.1, W 198.7, back to N; sum of steps exactly -360).
+  `getCurrentHeading()` = (360 - yaw) mirrors it into the bearing convention;
+  `getCurrentYaw()` keeps the raw sensor value. All control uses the heading.
+- Yaw/heading against the phone compass and true north (2026-10-12, indoors):
+  - N: yaw 114.4, heading 245.6  |  E: yaw 329.0, heading 30.7
+  - one continuous run (no reset between points): E yaw 13.0 / heading 347.9,
+    N yaw 118.0 / heading 242.1 -> heading grows clockwise, the fix is correct.
+  - A constant offset between heading and true azimuth (~242 deg) mixes the
+    mounting, the magnetic declination and the uncalibrated magnetometer; it is
+    NOT applied. Indoor magnetic distortion dominates (the 90 deg turn measured
+    106 deg, E point scattered 337-353). Determine it on the water after a
+    figure-eight calibration.
 - Correction: earlier docs claimed "Sea dynamic model active"; the module actually
   ran `dynModel 6 (AIR1)` until it was set to SEA on 2026-10-11.
 - Measured 2026-10-12 with the stored configuration, no fix (indoors, `Fix: NO`):
@@ -112,7 +126,8 @@ HEADING_HOLD values are starting values, not tuned.
 - RC receiver integration (mode switching, manual control; 1000-1500 us = reverse,
   1500-2000 us = forward).
 - Magnetic declination: yaw from the BNO085 is referenced to magnetic north (per the
-  report description), GNSS bearing to true north; no correction is applied yet and
-  the yaw sign/direction against a compass is not verified.
+  report description), GNSS bearing to true north; no correction is applied yet.
+  The yaw direction against a compass is now verified (counter-clockwise, mirrored
+  by `getCurrentHeading()`), but the constant offset is not determined.
 - Full PID tuning for boat dynamics.
 - OLED telemetry display.
