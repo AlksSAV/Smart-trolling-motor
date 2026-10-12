@@ -121,6 +121,13 @@ Build succeeded on 2026-10-11:
 
 Earlier build (2026-10-10): RAM 1.3% (4544 B), Flash 4% (287805 B).
 
-## Not verified
+## Flash and monitor
 
-- Flash and monitor not verified — board connected on COM23 but not yet flashed.
+Verified on 2026-10-12: `python -m platformio run -e esp32s3 -t upload --upload-port COM23`
+flashes the board (hash of every written region verified by esptool), and the
+firmware prints status to USB CDC on COM23. Chip: ESP32-S3 rev v0.2, flash
+auto-detected 16 MB, PSRAM 8 MB.
+
+Note: on Windows the PlatformIO upload output may raise
+`UnicodeEncodeError: 'charmap' codec can't encode characters` when it prints the
+progress bar while piped; the upload itself still finishes SUCCESS.

@@ -22,8 +22,10 @@
 - [x] Mode switching M/H/S + computeControl() verified on hardware (IMU + GNSS only, no actuators)
 
 ## Next Steps
-- [ ] GNSS: проверить power-cycle — сохраняется ли конфигурация в Flash (сейчас подтверждено только чтением)
-- [ ] GNSS: замерить поток финального набора (2 предложения) при наличии фикса — ожидание 10 msg/s
+- [x] GNSS: power-cycle — конфигурация (measRate 200, SEA, GGA+RMC) сохраняется во Flash (2026-10-12)
+- [ ] GNSS: замерить поток финального набора (2 предложения) при наличии фикса — без фикса в помещении замерено 10 msg/s
+- [ ] GNSS: выяснить, почему `CFG-VALGET` для слоя BBR возвращает UBX-NAK
+- [ ] IMU: проверить срабатывание защиты по устаревшим данным (отключить SDA/SCL в H/S, ждать `[WARN] IMU data stale` через ~1 с)
 - [ ] Re-verify ESC/servo physical movement after refactor (actuators not connected now)
 - [ ] Test GNSS fix outdoors (verify real coordinates and bearing)
 - [ ] Test ANCHOR_HOLD with real GPS fix (only simulated target tested so far)
