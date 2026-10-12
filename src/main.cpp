@@ -27,11 +27,16 @@
 Adafruit_BNO08x bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 bool imu_ready = false;
+// IMU reports at 20 Hz (50 ms). No new rotation vector for this long = stale.
+const unsigned long IMU_TIMEOUT_MS = 1000;
+unsigned long lastImuEventMs = 0;
+// False until the first rotation vector arrives: sensorValue is zeroed before
+// that, and getCurrentYaw() would return a bogus 0 deg.
+bool imuHasData = false;
 
 HardwareSerial gnssSerial(1);
 TinyGPSPlus gps;
 const unsigned long GNSS_BAUD = 38400;
-bool ubx_configured = false;
 uint32_t parsed_sentences = 0;
 
 // ============================================================
@@ -69,33 +74,6 @@ const int SERVO_MAX_US         = 2000;
 
 const int LEDC_FREQ            = 50;
 const int LEDC_RESOLUTION      = 14;
-
-// ============================================================
-// UBX Helper
-// ============================================================
-void sendUBX(uint8_t cls, uint8_t id, uint8_t* payload, uint16_t length) {
-    gnssSerial.write(0xB5);
-    gnssSerial.write(0x62);
-    gnssSerial.write(cls);
-    gnssSerial.write(id);
-    gnssSerial.write(length & 0xFF);
-    gnssSerial.write((length >> 8) & 0xFF);
-
-    uint8_t ck_a = 0, ck_b = 0;
-    ck_a += cls; ck_b += ck_a;
-    ck_a += id;  ck_b += ck_a;
-    ck_a += (length & 0xFF);       ck_b += ck_a;
-    ck_a += ((length >> 8) & 0xFF); ck_b += ck_a;
-
-    for (uint16_t i = 0; i < length; i++) {
-        gnssSerial.write(payload[i]);
-        ck_a += payload[i];
-        ck_b += ck_a;
-    }
-    gnssSerial.write(ck_a);
-    gnssSerial.write(ck_b);
-    delay(100);
-}
 
 // ============================================================
 // Math Helpers
@@ -138,6 +116,11 @@ float getCurrentYaw() {
     return yaw;
 }
 
+bool imuStale() {
+    return !imu_ready || !imuHasData ||
+           (millis() - lastImuEventMs > IMU_TIMEOUT_MS);
+}
+
 // ============================================================
 // Control Output (shared by control loop and status display)
 // ============================================================
@@ -149,6 +132,7 @@ struct ControlState {
     int escPWM;          // us
     int servoPWM;        // us
     bool gnssLost;       // ANCHOR_HOLD: no valid GNSS fix, outputs forced neutral
+    bool imuLost;        // HEADING/ANCHOR_HOLD: IMU data stale, outputs forced neutral
 };
 
 void processSerialCommands();
@@ -164,8 +148,7 @@ void setup() {
     while (!Serial) { delay(10); }
 
     Serial.println("\n========================================");
-    Serial.println("  Smart Trolling Motor v0.3.1");
-    Serial.println("  ESC Test Sequence Added");
+    Serial.println("  Smart Trolling Motor");
     Serial.println("========================================");
     Serial.println("Waiting 2 seconds for modules to power up...");
     delay(2000);
@@ -182,6 +165,7 @@ void setup() {
         if (bno08x.begin_I2C(BNO08X_ADDRESS)) {
             bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 50000);
             imu_ready = true;
+            lastImuEventMs = millis();
             Serial.println("[IMU] OK: BNO085 initialized at 0x4B");
         } else {
             Serial.println("[IMU] Failed. Retrying...");
@@ -197,32 +181,17 @@ void setup() {
     gnssSerial.begin(GNSS_BAUD, SERIAL_8N1, GNSS_RX, GNSS_TX);
     Serial.printf("[GNSS] OK: Listening at %lu baud.\n", GNSS_BAUD);
 
-    // --- 3. Send UBX Config ---
-    if (imu_ready) {
-        Serial.println("[GNSS] Sending UBX config: 5Hz + Sea mode...");
-        delay(500);
+    // GNSS module is configured once via tools/gnss_config.py (stored in
+    // module Flash); firmware does not write to it.
 
-        uint8_t ratePayload[] = {0xC8, 0x00, 0x01, 0x00, 0x00, 0x00};
-        sendUBX(0x06, 0x08, ratePayload, sizeof(ratePayload));
-
-        uint8_t nav5Payload[36] = {0};
-        nav5Payload[0] = 0x01;
-        nav5Payload[1] = 0x00;
-        nav5Payload[2] = 0x06;
-        sendUBX(0x06, 0x24, nav5Payload, sizeof(nav5Payload));
-
-        ubx_configured = true;
-        Serial.println("[GNSS] OK: Configuration applied.");
-    }
-
-    // --- 4. Init LEDC for ESC and Servo ---
+    // --- 3. Init LEDC for ESC and Servo ---
     Serial.println("\n[LEDC] Initializing PWM outputs...");
 
     ledcAttach(ESC_PIN, LEDC_FREQ, LEDC_RESOLUTION);
     ledcAttach(SERVO_PIN, LEDC_FREQ, LEDC_RESOLUTION);
 
 #if RUN_STARTUP_TEST
-    // --- 5. ESC TEST SEQUENCE (bench only) ---
+    // --- 4. ESC TEST SEQUENCE (bench only) ---
     Serial.println("\n========================================");
     Serial.println("  ESC TEST SEQUENCE");
     Serial.println("  Listen for ESC beeps!");
@@ -285,7 +254,7 @@ void setup() {
     Serial.println("[SAFE START] ESC/Servo neutral (startup test disabled)");
 #endif
 
-    // --- 6. Print help ---
+    // --- 5. Print help ---
     Serial.println(">>> Serial Commands:");
     Serial.println("    'M' = Manual");
     Serial.println("    'H' = Heading Hold");
@@ -299,7 +268,11 @@ void setup() {
 // ============================================================
 void loop() {
     if (imu_ready) {
-        bno08x.getSensorEvent(&sensorValue);
+        if (bno08x.getSensorEvent(&sensorValue) &&
+            sensorValue.sensorId == SH2_ARVR_STABILIZED_RV) {
+            lastImuEventMs = millis();
+            imuHasData = true;
+        }
     }
 
     while (gnssSerial.available() > 0) {
@@ -339,8 +312,8 @@ void processSerialCommands() {
         Serial.println("\n[MODE] MANUAL");
     }
     else if (cmd == 'H') {
-        if (!imu_ready) {
-            Serial.println("\n[ERROR] IMU not ready!");
+        if (imuStale()) {
+            Serial.println("\n[ERROR] IMU not ready or data stale!");
             return;
         }
         currentMode = MODE_HEADING_HOLD;
@@ -380,6 +353,13 @@ ControlState computeControl(float currentYaw) {
     out.escPWM = ESC_NEUTRAL_US;
     out.servoPWM = SERVO_NEUTRAL_US;
     out.gnssLost = false;
+    out.imuLost = false;
+
+    // Stale IMU yaw would steer on old heading: hold neutral instead.
+    if (currentMode != MODE_MANUAL && imuStale()) {
+        out.imuLost = true;
+        return out;
+    }
 
     if (currentMode == MODE_MANUAL) {
         // ESC and servo stay at neutral
@@ -433,9 +413,9 @@ ControlState computeControl(float currentYaw) {
 }
 
 void calculateAndApplyControl() {
-    if (!imu_ready) return;
-
-    ControlState ctrl = computeControl(getCurrentYaw());
+    // computeControl() returns neutral when the IMU is stale or missing,
+    // so outputs are always written (never left at the last value).
+    ControlState ctrl = computeControl(imuStale() ? 0.0 : getCurrentYaw());
     ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
     ledcWrite(SERVO_PIN, usToDuty(ctrl.servoPWM));
 }
@@ -456,23 +436,28 @@ void displaySystemStatus() {
     Serial.printf("[SYS] Mode: %-16s\n", modeStr.c_str());
 
     float currentYaw = 0.0;
-    if (imu_ready) {
+    if (!imu_ready) {
+        Serial.println("[IMU] NOT READY");
+    } else if (imuStale()) {
+        Serial.println("[IMU] STALE (no data > 1000 ms)");
+    } else {
         currentYaw = getCurrentYaw();
         Serial.printf("[IMU] Yaw: %6.1f deg\n", currentYaw);
-    } else {
-        Serial.println("[IMU] NOT READY");
     }
 
-    float hz = (parsed_sentences * 1000.0) / 1000.0;
+    // Status is printed once per second, so the counter equals sentences/s.
+    uint32_t sentencesPerSec = parsed_sentences;
     parsed_sentences = 0;
-    Serial.printf("[GNSS] ~%.0f Hz | Sats: %2d | Fix: %s\n",
-                  hz, gps.satellites.value(),
+    Serial.printf("[GNSS] %lu msg/s | Sats: %2d | Fix: %s\n",
+                  (unsigned long)sentencesPerSec, gps.satellites.value(),
                   gps.location.isValid() ? "YES" : "NO");
 
-    if (imu_ready && (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD)) {
+    if (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD) {
         ControlState ctrl = computeControl(currentYaw);
 
-        if (currentMode == MODE_HEADING_HOLD) {
+        if (ctrl.imuLost) {
+            Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
+        } else if (currentMode == MODE_HEADING_HOLD) {
             Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | Servo: %4d us\n",
                           targetYaw, ctrl.headingError, ctrl.servoPWM);
         } else if (ctrl.gnssLost) {

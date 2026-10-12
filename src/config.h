@@ -33,11 +33,11 @@
 #define RC_PULSE_MID      1500    // Средняя длительность импульса (µs)
 
 // Параметры GNSS
-#define GNSS_BAUD_RATE    115200  // Скорость UART (проверить!)
-#define GNSS_UPDATE_RATE  10      // Частота обновления (Hz)
+#define GNSS_BAUD_RATE    38400   // Скорость UART (проверено на железе)
+#define GNSS_UPDATE_RATE  5       // Частота обновления (Hz), measRate 200 мс
 
 // Параметры IMU
-#define IMU_I2C_ADDR      0x4A    // Адрес BNO085 на шине I2C
+#define IMU_I2C_ADDR      0x4B    // Адрес BNO085 на шине I2C (проверено на железе)
 
 // Параметры удержания позиции
 #define HOLD_MODE_DEADZONE  2.0   // Мёртвая зона (метры)

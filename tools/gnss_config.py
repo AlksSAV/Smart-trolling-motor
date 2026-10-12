@@ -98,7 +98,11 @@ CFG_VALSET = (0x06, 0x8A)
 #     satellites.value() comes from GGA (TinyGPS++.cpp:201), not GSV, so
 #     dropping GSV costs nothing.
 #   Result: 2 sentences per cycle = 10 msg/s, ~13% of the line.
+#   measRate 200 ms (5 Hz): measured after a power cycle that Flash did not
+#     hold it (RAM fell back to 1000 ms); older firmware was re-sending it via
+#     legacy UBX-CFG-RATE on every boot, which hid that.
 SET_ITEMS = [
+    ("CFG-RATE-MEAS",       0x30210001, "U2", 200),
     ("CFG-NAVSPG-DYNMODEL", 0x20110021, "E1", 5),   # SEA
     ("MSGOUT-GGA-UART1",    0x209100bb, "U1", 1),
     ("MSGOUT-RMC-UART1",    0x209100ac, "U1", 1),
