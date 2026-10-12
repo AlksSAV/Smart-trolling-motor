@@ -63,14 +63,34 @@ bool isSimulatedTarget = false;
 // ============================================================
 const float LOITER_RADIUS_M    = 2.0;
 const float MAX_DISTANCE_M     = 10.0;
-const float SERVO_P_GAIN       = 8.0;
 const float LOITER_SPEED_GAIN  = 0.15;
 
+// ESC is bidirectional: 1500 neutral, >1500 forward, <1500 reverse.
+// It ignores 1500 +/- ESC_DEADBAND_US, so speed 0..1 is mapped outside the band.
 const int ESC_NEUTRAL_US       = 1500;
+const int ESC_DEADBAND_US      = 50;
 const int ESC_MAX_FORWARD_US   = 1800;
+const int ESC_MAX_REVERSE_US   = 1250;
+
+// Servo: 1000..2000 us = -90..+90 deg from the boat centerline (linear).
 const int SERVO_NEUTRAL_US     = 1500;
 const int SERVO_MIN_US         = 1000;
 const int SERVO_MAX_US         = 2000;
+const float SERVO_RANGE_DEG    = 90.0;
+// +1: positive angle -> longer pulse. Set to -1 if the servo turns the wrong
+// way on the bench. Also depends on the yaw sign convention (not verified).
+const float SERVO_DIR          = 1.0;
+
+// ANCHOR_HOLD: thrust switches to reverse when the target is more than
+// REVERSE_ENTER_DEG off the bow, back to forward below REVERSE_EXIT_DEG.
+const float REVERSE_ENTER_DEG  = 100.0;
+const float REVERSE_EXIT_DEG   = 80.0;
+
+// HEADING_HOLD: the servo is turned fully to the side the heading must change
+// toward; thrust grows with the error. Starting values, not tuned.
+const float HEADING_DEADZONE_DEG     = 5.0;
+const float HEADING_FULL_THRUST_DEG  = 45.0;
+const float HEADING_MAX_SPEED        = 0.5;
 
 const int LEDC_FREQ            = 50;
 const int LEDC_RESOLUTION      = 14;
@@ -105,6 +125,39 @@ uint32_t usToDuty(uint32_t us) {
     return (us * 16384) / 20000;
 }
 
+// speed: -1.0 (full reverse) .. +1.0 (full forward), 0 = neutral.
+int speedToEscUs(float speed) {
+    speed = constrainFloat(speed, -1.0, 1.0);
+    if (speed > 0.0) {
+        int start = ESC_NEUTRAL_US + ESC_DEADBAND_US;
+        return start + (int)(speed * (ESC_MAX_FORWARD_US - start));
+    }
+    if (speed < 0.0) {
+        int start = ESC_NEUTRAL_US - ESC_DEADBAND_US;
+        return start - (int)(-speed * (start - ESC_MAX_REVERSE_US));
+    }
+    return ESC_NEUTRAL_US;
+}
+
+// angleDeg: -90..+90 relative to the boat centerline.
+int angleToServoUs(float angleDeg) {
+    angleDeg = constrainFloat(angleDeg, -SERVO_RANGE_DEG, SERVO_RANGE_DEG);
+    return SERVO_NEUTRAL_US +
+           (int)(SERVO_DIR * angleDeg * (SERVO_MAX_US - SERVO_NEUTRAL_US) / SERVO_RANGE_DEG);
+}
+
+// Hysteresis latch for ANCHOR_HOLD thrust direction (reset on mode change).
+bool thrustReversed = false;
+
+void updateThrustDirection(float targetOffBowDeg) {
+    float a = fabsf(targetOffBowDeg);
+    if (!thrustReversed && a > REVERSE_ENTER_DEG) {
+        thrustReversed = true;
+    } else if (thrustReversed && a < REVERSE_EXIT_DEG) {
+        thrustReversed = false;
+    }
+}
+
 float getCurrentYaw() {
     float real = sensorValue.un.arvrStabilizedRV.real;
     float i    = sensorValue.un.arvrStabilizedRV.i;
@@ -127,8 +180,9 @@ bool imuStale() {
 struct ControlState {
     float distance;      // m (ANCHOR_HOLD only)
     float bearing;       // deg (ANCHOR_HOLD only)
-    float headingError;  // deg (HEADING_HOLD: yaw error)
-    float yawErrorRatio; // 1.0 .. 0.5 (ANCHOR_HOLD only)
+    float headingError;  // deg (HEADING_HOLD: yaw error, ANCHOR_HOLD: target off the bow)
+    float servoAngle;    // deg, -90..+90 from the centerline
+    bool reversed;       // ANCHOR_HOLD: thrust is backward
     int escPWM;          // us
     int servoPWM;        // us
     bool gnssLost;       // ANCHOR_HOLD: no valid GNSS fix, outputs forced neutral
@@ -203,10 +257,11 @@ void setup() {
     ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
     delay(3000);
 
-    // Step 2: Arm (some ESCs need this)
-    Serial.println("\n[ESC TEST] Step 2: Minimum throttle (1000 us) for 2 sec");
-    Serial.println(">>> ESC should beep to confirm arming <<<");
-    ledcWrite(ESC_PIN, usToDuty(1000));
+    // Step 2: Small throttle forward (motor should spin slowly if connected).
+    // 1000 us is NOT used here: on a bidirectional ESC it is full reverse.
+    Serial.println("\n[ESC TEST] Step 2: Small throttle (1600 us)");
+    Serial.println(">>> If motor connected, it should spin slowly <<<");
+    ledcWrite(ESC_PIN, usToDuty(1600));
     delay(2000);
 
     // Step 3: Back to neutral
@@ -214,18 +269,7 @@ void setup() {
     ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
     delay(1000);
 
-    // Step 4: Small throttle increase (motor should spin slowly if connected)
-    Serial.println("\n[ESC TEST] Step 4: Small throttle (1550 us)");
-    Serial.println(">>> If motor connected, it should spin slowly <<<");
-    ledcWrite(ESC_PIN, usToDuty(1550));
-    delay(2000);
-
-    // Step 5: Back to neutral
-    Serial.println("\n[ESC TEST] Step 5: Back to neutral (1500 us)");
-    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
-    delay(1000);
-
-    // Step 6: Servo test
+    // Step 4: Servo test
     Serial.println("\n[SERVO TEST] Moving servo through range...");
     ledcWrite(SERVO_PIN, usToDuty(SERVO_MIN_US));
     Serial.println("[SERVO] Position: 1000 us (MIN)");
@@ -328,6 +372,7 @@ void processSerialCommands() {
         }
         currentMode = MODE_ANCHOR_HOLD;
         isSimulatedTarget = false;
+        thrustReversed = false;
         targetLat = gps.location.lat();
         targetLon = gps.location.lng();
         Serial.printf("\n[MODE] ANCHOR HOLD. Target: %.6f, %.6f\n", targetLat, targetLon);
@@ -335,6 +380,7 @@ void processSerialCommands() {
     else if (cmd == 'S') {
         currentMode = MODE_ANCHOR_HOLD;
         isSimulatedTarget = true;
+        thrustReversed = false;
         targetLat = 55.7558;
         targetLon = 37.6173;
         Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED). Target: 9m at 90 deg");
@@ -349,7 +395,8 @@ ControlState computeControl(float currentYaw) {
     out.distance = 0.0;
     out.bearing = 0.0;
     out.headingError = 0.0;
-    out.yawErrorRatio = 1.0;
+    out.servoAngle = 0.0;
+    out.reversed = false;
     out.escPWM = ESC_NEUTRAL_US;
     out.servoPWM = SERVO_NEUTRAL_US;
     out.gnssLost = false;
@@ -365,12 +412,18 @@ ControlState computeControl(float currentYaw) {
         // ESC and servo stay at neutral
     }
     else if (currentMode == MODE_HEADING_HOLD) {
+        // Bow motor turns the boat by pushing the bow sideways: servo fully to
+        // the side of the error, thrust grows with the error size.
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);
         out.headingError = yawError;
-        float servoDev = constrainFloat(yawError * SERVO_P_GAIN,
-                                         -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                         (SERVO_MAX_US - SERVO_NEUTRAL_US));
-        out.servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
+        float absErr = fabsf(yawError);
+        if (absErr > HEADING_DEADZONE_DEG) {
+            float speed = constrainFloat(absErr / HEADING_FULL_THRUST_DEG, 0.0, 1.0)
+                          * HEADING_MAX_SPEED;
+            out.servoAngle = (yawError > 0.0) ? SERVO_RANGE_DEG : -SERVO_RANGE_DEG;
+            out.escPWM = speedToEscUs(speed);
+        }
+        out.servoPWM = angleToServoUs(out.servoAngle);
     }
     else if (currentMode == MODE_ANCHOR_HOLD) {
         // No valid fix (and not simulating): hold safe neutral instead of
@@ -392,21 +445,27 @@ ControlState computeControl(float currentYaw) {
                 targetLat, targetLon);
         }
 
-        out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
-        out.yawErrorRatio = 1.0 - (constrainFloat(fabsf(out.headingError), 0.0, 90.0) / 90.0) * 0.5;
+        // Direction to the target relative to the bow, -180..+180.
+        float d = normalizeAngleDiff(out.bearing, currentYaw);
+        out.headingError = d;
+
+        // Thrust forward with the servo at d, or backward with the servo
+        // turned 180 deg away so that the reverse thrust still points at d.
+        updateThrustDirection(d);
+        out.reversed = thrustReversed;
+        if (thrustReversed) {
+            out.servoAngle = (d > 0.0) ? d - 180.0 : d + 180.0;
+        } else {
+            out.servoAngle = d;
+        }
 
         if (out.distance > LOITER_RADIUS_M) {
             float distanceError = out.distance - LOITER_RADIUS_M;
-            float speedFactor = constrainFloat(
+            float speed = constrainFloat(
                 distanceError / (MAX_DISTANCE_M - LOITER_RADIUS_M), 0.0, 1.0);
-            float effectiveSpeed = speedFactor * out.yawErrorRatio;
-            out.escPWM = ESC_NEUTRAL_US + (int)(effectiveSpeed * (ESC_MAX_FORWARD_US - ESC_NEUTRAL_US));
+            out.escPWM = speedToEscUs(thrustReversed ? -speed : speed);
         }
-
-        float servoDev = constrainFloat(out.headingError * SERVO_P_GAIN,
-                                         -(SERVO_NEUTRAL_US - SERVO_MIN_US),
-                                         (SERVO_MAX_US - SERVO_NEUTRAL_US));
-        out.servoPWM = SERVO_NEUTRAL_US + (int)servoDev;
+        out.servoPWM = angleToServoUs(out.servoAngle);
     }
 
     return out;
@@ -458,15 +517,17 @@ void displaySystemStatus() {
         if (ctrl.imuLost) {
             Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
         } else if (currentMode == MODE_HEADING_HOLD) {
-            Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | Servo: %4d us\n",
-                          targetYaw, ctrl.headingError, ctrl.servoPWM);
+            Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | ESC: %4d us | Servo: %4d us (%5.1f deg)\n",
+                          targetYaw, ctrl.headingError, ctrl.escPWM,
+                          ctrl.servoPWM, ctrl.servoAngle);
         } else if (ctrl.gnssLost) {
             Serial.println("[WARN] ANCHOR HOLD: no GNSS fix - ESC/Servo neutral");
         } else {
-            Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | HeadErr: %6.1f\n",
+            Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | OffBow: %6.1f\n",
                           ctrl.distance, ctrl.bearing, ctrl.headingError);
-            Serial.printf("[OUT] ESC: %4d us | Servo: %4d us | SpeedRatio: %.0f%%\n",
-                          ctrl.escPWM, ctrl.servoPWM, ctrl.yawErrorRatio * 100.0);
+            Serial.printf("[OUT] ESC: %4d us (%s) | Servo: %4d us (%5.1f deg)\n",
+                          ctrl.escPWM, ctrl.reversed ? "REV" : "FWD",
+                          ctrl.servoPWM, ctrl.servoAngle);
         }
     }
 
