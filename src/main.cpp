@@ -169,6 +169,16 @@ float getCurrentYaw() {
     return yaw;
 }
 
+// BNO085 yaw grows counter-clockwise, GNSS bearing and the servo angle grow
+// clockwise. Verified on hardware 2026-10-12: one full clockwise turn gave
+// -360 deg of yaw (N 117.8, E 36.8, S 293.1, W 198.7, back to N). Yaw is
+// mirrored here so both are compared in the same direction.
+// A constant offset (mounting + magnetic declination) remains and is NOT
+// applied yet: it cannot be separated from magnetic distortion indoors.
+float getCurrentHeading() {
+    return fmod((360.0 - getCurrentYaw()), 360.0);
+}
+
 bool imuStale() {
     return !imu_ready || !imuHasData ||
            (millis() - lastImuEventMs > IMU_TIMEOUT_MS);
@@ -362,7 +372,7 @@ void processSerialCommands() {
         }
         currentMode = MODE_HEADING_HOLD;
         isSimulatedTarget = false;
-        targetYaw = getCurrentYaw();
+        targetYaw = getCurrentHeading();
         Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg\n", targetYaw);
     }
     else if (cmd == 'A') {
@@ -474,7 +484,7 @@ ControlState computeControl(float currentYaw) {
 void calculateAndApplyControl() {
     // computeControl() returns neutral when the IMU is stale or missing,
     // so outputs are always written (never left at the last value).
-    ControlState ctrl = computeControl(imuStale() ? 0.0 : getCurrentYaw());
+    ControlState ctrl = computeControl(imuStale() ? 0.0 : getCurrentHeading());
     ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
     ledcWrite(SERVO_PIN, usToDuty(ctrl.servoPWM));
 }
@@ -494,14 +504,15 @@ void displaySystemStatus() {
     if (isSimulatedTarget) modeStr += " (SIM)";
     Serial.printf("[SYS] Mode: %-16s\n", modeStr.c_str());
 
-    float currentYaw = 0.0;
+    float currentHeading = 0.0;
     if (!imu_ready) {
         Serial.println("[IMU] NOT READY");
     } else if (imuStale()) {
         Serial.println("[IMU] STALE (no data > 1000 ms)");
     } else {
-        currentYaw = getCurrentYaw();
-        Serial.printf("[IMU] Yaw: %6.1f deg\n", currentYaw);
+        currentHeading = getCurrentHeading();
+        Serial.printf("[IMU] Yaw: %6.1f | Heading: %6.1f deg\n",
+                      getCurrentYaw(), currentHeading);
     }
 
     // Status is printed once per second, so the counter equals sentences/s.
@@ -512,7 +523,7 @@ void displaySystemStatus() {
                   gps.location.isValid() ? "YES" : "NO");
 
     if (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD) {
-        ControlState ctrl = computeControl(currentYaw);
+        ControlState ctrl = computeControl(currentHeading);
 
         if (ctrl.imuLost) {
             Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
