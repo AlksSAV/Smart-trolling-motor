@@ -81,6 +81,7 @@ bool isSimulatedTarget = false;
 // ============================================================
 const float LOITER_RADIUS_M    = 2.0;
 const float MAX_DISTANCE_M     = 10.0;
+const float SIM_DISTANCE_M     = 9.0;  // Simulated boat distance from target
 
 const int ESC_NEUTRAL_US       = 1500;
 const int ESC_DEADBAND_US      = 50;
@@ -114,6 +115,23 @@ float calculateBearing(double lat1, double lon1, double lat2, double lon2) {
     double x = cos(rLat1) * sin(rLat2) - sin(rLat1) * cos(rLat2) * cos(dLon);
     float bearing = atan2(y, x) * 180.0 / PI;
     return fmod((bearing + 360.0), 360.0);
+}
+
+// Point destination from start given a bearing (deg) and distance (m).
+void destinationPoint(double lat1, double lon1, float bearingDeg, float distM,
+                      float &outLat, float &outLon) {
+    const float R = 6371000.0f;
+    float brng = bearingDeg * PI / 180.0f;
+    float d = distM / R;
+    double rLat = lat1 * PI / 180.0;
+    double rLon = lon1 * PI / 180.0;
+    double lat2 = asin(sin(rLat) * cos(d) + cos(rLat) * sin(d) * cos(brng));
+    double lon2 = rLon + atan2(sin(brng) * sin(d) * cos(rLat),
+                               cos(d) - sin(rLat) * sin(lat2));
+    // lat2/lon2 are still radians - convert back, otherwise the caller's
+    // degree-based distance/bearing math is off by 180/PI.
+    outLat = (float)(lat2 * 180.0 / PI);
+    outLon = (float)(lon2 * 180.0 / PI);
 }
 
 float normalizeAngleDiff(float target, float current) {
@@ -227,6 +245,8 @@ struct ControlState {
     bool gnssLost;
     bool imuLost;
 };
+
+static ControlState lastCtrl;
 
 void processSerialCommands();
 ControlState computeControl(float currentYaw);
@@ -475,8 +495,17 @@ ControlState computeControl(float currentYaw) {
             return out;
         }
 
-        float lat = isSimulatedTarget ? (float)targetLat : (float)gps.location.lat();
-        float lon = isSimulatedTarget ? (float)targetLon : (float)gps.location.lng();
+        // In simulation the boat is pinned 9 m due west of the target, so the
+        // target always lies 9 m ahead at bearing 90 deg. Feeding the target
+        // itself as the current position (previous behaviour) made the distance
+        // zero and the PID never produced thrust.
+        float lat, lon;
+        if (isSimulatedTarget) {
+            destinationPoint(targetLat, targetLon, 270.0f, SIM_DISTANCE_M, lat, lon);
+        } else {
+            lat = (float)gps.location.lat();
+            lon = (float)gps.location.lng();
+        }
         float speed_ms = (gps.speed.isValid()) ? gps.speed.mps() : 0.0f;
 
         const float dt = 0.05f; // 50 ms = 20 Hz
@@ -490,17 +519,8 @@ ControlState computeControl(float currentYaw) {
         out.escPWM = esc_controller.getSmoothedPwm(cmd.thrust);
         out.servoPWM = angleToServoUs(out.servoAngle);
 
-        if (isSimulatedTarget) {
-            out.distance = 9.0;
-            out.bearing  = 90.0;
-        } else {
-            out.distance = gps.distanceBetween(
-                gps.location.lat(), gps.location.lng(),
-                targetLat, targetLon);
-            out.bearing = calculateBearing(
-                gps.location.lat(), gps.location.lng(),
-                targetLat, targetLon);
-        }
+        out.distance = gps.distanceBetween(lat, lon, targetLat, targetLon);
+        out.bearing = calculateBearing(lat, lon, targetLat, targetLon);
         out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
     }
 
@@ -508,12 +528,13 @@ ControlState computeControl(float currentYaw) {
 }
 
 void calculateAndApplyControl() {
-    ControlState ctrl = computeControl(imuStale() ? 0.0 : getFusedHeading());
+    ControlState ctrl = computeControl(imuStale() ? 0.0f : getFusedHeading());
+    lastCtrl = ctrl;
 
-    if (currentMode == MODE_ANCHOR_HOLD && !ctrl.gnssLost && !ctrl.imuLost) {
-        ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
-    } else {
-        ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
+    ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
+    // Outside the smoothed path the ramp state must follow the written PWM,
+    // otherwise the next ANCHOR_HOLD entry ramps from a stale current_pwm.
+    if (!(currentMode == MODE_ANCHOR_HOLD && !ctrl.gnssLost && !ctrl.imuLost)) {
         esc_controller.setDirectPwm(ctrl.escPWM);
     }
     ledcWrite(SERVO_PIN, usToDuty(ctrl.servoPWM));
@@ -571,21 +592,20 @@ void displaySystemStatus() {
                   gps.location.isValid() ? "YES" : "NO");
 
     if (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD) {
-        ControlState ctrl = computeControl(getFusedHeading());
-        if (ctrl.imuLost) {
+        if (lastCtrl.imuLost) {
             Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
         } else if (currentMode == MODE_HEADING_HOLD) {
             Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | ESC: %4d us | Servo: %4d us (%5.1f deg)\n",
-                          targetYaw, ctrl.headingError, ctrl.escPWM,
-                          ctrl.servoPWM, ctrl.servoAngle);
-        } else if (ctrl.gnssLost) {
+                          targetYaw, lastCtrl.headingError, lastCtrl.escPWM,
+                          lastCtrl.servoPWM, lastCtrl.servoAngle);
+        } else if (lastCtrl.gnssLost) {
             Serial.println("[WARN] ANCHOR HOLD: no GNSS fix - ESC/Servo neutral");
         } else {
             Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | OffBow: %6.1f\n",
-                          ctrl.distance, ctrl.bearing, ctrl.headingError);
+                          lastCtrl.distance, lastCtrl.bearing, lastCtrl.headingError);
             Serial.printf("[OUT] ESC: %4d us (%s) | Servo: %4d us (%5.1f deg)\n",
-                          ctrl.escPWM, ctrl.reversed ? "REV" : "FWD",
-                          ctrl.servoPWM, ctrl.servoAngle);
+                          lastCtrl.escPWM, lastCtrl.reversed ? "REV" : "FWD",
+                          lastCtrl.servoPWM, lastCtrl.servoAngle);
         }
     }
     Serial.println("----------------------------------------\n");

@@ -25,13 +25,11 @@ public:
 
         int target_pwm;
         if (thrust_percent > 0.0f) {
-            target_pwm = map((long)thrust_percent,
-                             (long)deadzone_percent, 100L,
-                             pwm_neutral + 10, pwm_max);
+            target_pwm = (int)(pwm_neutral + 10 +
+                (int)((thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_max - pwm_neutral - 10)));
         } else if (thrust_percent < 0.0f) {
-            target_pwm = map((long)thrust_percent,
-                             -(long)deadzone_percent, -100L,
-                             pwm_neutral - 10, pwm_min);
+            target_pwm = (int)(pwm_neutral - 10 -
+                (int)((-thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_neutral - 10 - pwm_min)));
         } else {
             target_pwm = pwm_neutral;
         }

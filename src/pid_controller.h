@@ -28,9 +28,11 @@ public:
     float compute(float error, float dt) {
         if (dt <= 0.0f) return 0.0f;
 
-        // Мертвая зона
+        // Deadzone: output is suppressed, but prev_error still tracks the
+        // input. Zeroing it here would make the first derivative after the
+        // deadzone (error - 0)/dt and kick the output.
         if (fabsf(error) < deadzone) {
-            prev_error = 0.0f;
+            prev_error = error;
             return 0.0f;
         }
 
