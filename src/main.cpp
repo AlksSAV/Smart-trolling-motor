@@ -84,9 +84,6 @@ const float MAX_DISTANCE_M     = 10.0;
 const float SIM_DISTANCE_M     = 9.0;  // Simulated boat distance from target
 
 const int ESC_NEUTRAL_US       = 1500;
-const int ESC_DEADBAND_US      = 50;
-const int ESC_MAX_FORWARD_US   = 1800;
-const int ESC_MAX_REVERSE_US   = 1250;
 
 const int SERVO_NEUTRAL_US     = 1500;
 const int SERVO_MIN_US         = 1000;
@@ -98,8 +95,6 @@ const float REVERSE_ENTER_DEG  = 100.0;
 const float REVERSE_EXIT_DEG   = 80.0;
 
 const float HEADING_DEADZONE_DEG     = 5.0;
-const float HEADING_FULL_THRUST_DEG  = 45.0;
-const float HEADING_MAX_SPEED        = 0.5;
 
 const int LEDC_FREQ            = 50;
 const int LEDC_RESOLUTION      = 14;
@@ -151,19 +146,6 @@ uint32_t usToDuty(uint32_t us) {
     return (us * 16384) / 20000;
 }
 
-int speedToEscUs(float speed) {
-    speed = constrainFloat(speed, -1.0, 1.0);
-    if (speed > 0.0) {
-        int start = ESC_NEUTRAL_US + ESC_DEADBAND_US;
-        return start + (int)(speed * (ESC_MAX_FORWARD_US - start));
-    }
-    if (speed < 0.0) {
-        int start = ESC_NEUTRAL_US - ESC_DEADBAND_US;
-        return start - (int)(-speed * (start - ESC_MAX_REVERSE_US));
-    }
-    return ESC_NEUTRAL_US;
-}
-
 int angleToServoUs(float angleDeg) {
     angleDeg = constrainFloat(angleDeg, -SERVO_RANGE_DEG, SERVO_RANGE_DEG);
     return SERVO_NEUTRAL_US +
@@ -171,6 +153,10 @@ int angleToServoUs(float angleDeg) {
 }
 
 bool thrustReversed = false;
+
+// HEADING_HOLD keeps the throttle captured on mode entry and steers with the
+// servo only, so holding course no longer modulates or resets ESC speed.
+int headingHoldBaseEscUs = ESC_NEUTRAL_US;
 
 float getCurrentYaw() {
     float real = sensorValue.un.arvrStabilizedRV.real;
@@ -421,7 +407,11 @@ void processSerialCommands() {
         thrustReversed = false;
         anchor.deactivate();
         targetYaw = getFusedHeading();
-        Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg\n", targetYaw);
+        // Freeze the throttle the motor had when the mode was entered - from
+        // now on HEADING_HOLD only steers, it never changes speed.
+        headingHoldBaseEscUs = esc_controller.getCurrentPwm();
+        Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg | ESC frozen: %d us\n",
+                      targetYaw, headingHoldBaseEscUs);
     }
     else if (cmd == 'A') {
         if (!gps.location.isValid()) {
@@ -479,13 +469,13 @@ ControlState computeControl(float currentYaw) {
     else if (currentMode == MODE_HEADING_HOLD) {
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);
         out.headingError = yawError;
-        float absErr = fabsf(yawError);
-        if (absErr > HEADING_DEADZONE_DEG) {
-            float speed = constrainFloat(absErr / HEADING_FULL_THRUST_DEG, 0.0, 1.0)
-                          * HEADING_MAX_SPEED;
-            out.servoAngle = (yawError > 0.0) ? SERVO_RANGE_DEG : -SERVO_RANGE_DEG;
-            out.escPWM = speedToEscUs(speed);
+        // Steering only: throttle is frozen at the value captured on mode
+        // entry, the servo rudders proportionally to the course error so it
+        // tracks smoothly instead of snapping between the two end stops.
+        if (fabsf(yawError) > HEADING_DEADZONE_DEG) {
+            out.servoAngle = constrainFloat(yawError, -SERVO_RANGE_DEG, SERVO_RANGE_DEG);
         }
+        out.escPWM = headingHoldBaseEscUs;
         out.servoPWM = angleToServoUs(out.servoAngle);
     }
     else if (currentMode == MODE_ANCHOR_HOLD) {

@@ -57,9 +57,11 @@ Main firmware in `src/main.cpp` (self-contained). Heading EKF in `src/ekf_headin
 
 ### Operating modes
 1. **MANUAL** — ESC and servo at neutral. (RC control is a future task.)
-2. **HEADING_HOLD** — the boat is under way and holds its course. The servo turns
-   fully (+/-90 deg) to the side of the heading error, ESC thrust (forward only)
-   grows with the error. Not a standstill mode.
+2. **HEADING_HOLD** — the boat is under way and holds its course. Steering only:
+   the ESC keeps the throttle the motor had at the moment the mode was entered
+   (`headingHoldBaseEscUs`) and never changes speed, the servo rudders
+   proportionally to the heading error (clamped to +/-90 deg, dead zone 5 deg).
+   Not a standstill mode.
 3. **ANCHOR_HOLD** — GNSS holds the position; both ESC and servo active, thrust
    forward or reverse.
 
@@ -99,18 +101,23 @@ State: `[yaw, gyro_bias]` — heading и накопленный дрейф ма�
 | Max distance (full speed) | 10.0 m |
 | ESC neutral | 1500 us |
 | ESC dead band (ESC ignores it) | +/-50 us (1450..1550) |
-| ESC max forward / max reverse | 1800 / 1250 us |
+| ESC output range in firmware (`ESCController`) | 1000..2000 us, 1510 / 1490 at the dead-zone edge |
+| Simulated anchor distance | 9.0 m |
 | Servo min / neutral / max | 1000 / 1500 / 2000 us = -90 / 0 / +90 deg (linear) |
 | Servo direction `SERVO_DIR` | +1 (sign not verified on the bench) |
 | Reverse enter / exit (off the bow) | 100 / 80 deg |
-| HEADING_HOLD dead zone / full thrust / max speed | 5 deg / 45 deg / 50% |
+| HEADING_HOLD dead zone | 5 deg (steering only, no throttle change) |
 | LEDC frequency / resolution | 50 Hz / 14 bit |
 
 HEADING_HOLD values are starting values, not tuned.
 
+`ESCController` maps thrust percent to PWM with a float formula (no `map()`,
+which would truncate the percent to an integer and make the PWM step), then
+ramps it at `ramp_rate` us/s toward the target.
+
 ### Output mapping
-- `speedToEscUs(-1..+1)`: speed 0 = 1500; positive maps to 1550..1800, negative to
-  1450..1250, so every non-zero command is outside the ESC dead band.
+- `ESCController.getSmoothedPwm(-100..+100 %)`: dead zone +/-5 % around zero ->
+  1500 us; positive maps 1510..2000, negative maps 1490..1000, ramped.
 - `angleToServoUs(-90..+90 deg)` = 1500 + `SERVO_DIR` * angle * 500 / 90.
 - The ESC is a Flycolor 90A marine ESC, bidirectional, already calibrated 1000/1500/2000;
   it needs 3 s of 1500 us after power-up to arm and stops by itself on signal loss
