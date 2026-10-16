@@ -23,13 +23,16 @@ public:
             thrust_percent = 0.0f;
         }
 
+        // Linear map from the deadzone edge to the stick end. The old +/-10 us
+        // offset was a leftover from a unidirectional ESC: it widened the command
+        // deadband to +/-6 % while staying inside the ESC's own +/-50 us band.
         int target_pwm;
         if (thrust_percent > 0.0f) {
-            target_pwm = (int)(pwm_neutral + 10 +
-                (int)((thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_max - pwm_neutral - 10)));
+            target_pwm = pwm_neutral +
+                (int)((thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_max - pwm_neutral));
         } else if (thrust_percent < 0.0f) {
-            target_pwm = (int)(pwm_neutral - 10 -
-                (int)((-thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_neutral - 10 - pwm_min)));
+            target_pwm = pwm_neutral -
+                (int)((-thrust_percent - deadzone_percent) / (100.0f - deadzone_percent) * (pwm_neutral - pwm_min));
         } else {
             target_pwm = pwm_neutral;
         }
