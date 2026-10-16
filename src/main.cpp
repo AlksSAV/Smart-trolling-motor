@@ -102,16 +102,6 @@ const int LEDC_RESOLUTION      = 14;
 // ============================================================
 // Math Helpers
 // ============================================================
-float calculateBearing(double lat1, double lon1, double lat2, double lon2) {
-    double dLon = (lon2 - lon1) * PI / 180.0;
-    double rLat1 = lat1 * PI / 180.0;
-    double rLat2 = lat2 * PI / 180.0;
-    double y = sin(dLon) * cos(rLat2);
-    double x = cos(rLat1) * sin(rLat2) - sin(rLat1) * cos(rLat2) * cos(dLon);
-    float bearing = atan2(y, x) * 180.0 / PI;
-    return fmod((bearing + 360.0), 360.0);
-}
-
 // Point destination from start given a bearing (deg) and distance (m).
 void destinationPoint(double lat1, double lon1, float bearingDeg, float distM,
                       float &outLat, float &outLon) {
@@ -510,7 +500,7 @@ ControlState computeControl(float currentYaw) {
         out.servoPWM = angleToServoUs(out.servoAngle);
 
         out.distance = gps.distanceBetween(lat, lon, targetLat, targetLon);
-        out.bearing = calculateBearing(lat, lon, targetLat, targetLon);
+        out.bearing = anchor.getBearing(lat, lon, targetLat, targetLon);
         out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
     }
 
@@ -540,7 +530,7 @@ void calculateAndApplyControl() {
             (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
                 ? gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
             (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
-                ? calculateBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
+                ? anchor.getBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
             headingEKF.heading(),
             headingEKF.biasDegPerSec(),
             lastEkfInnovDeg,

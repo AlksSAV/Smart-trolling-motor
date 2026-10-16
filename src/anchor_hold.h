@@ -23,12 +23,13 @@ private:
     float loiter_radius_m = 2.0f;   // Радиус "мёртвой зоны" (метод удержания)
     float max_distance_m  = 10.0f;  // Расстояние для максимальной тяги
 
-    static float getDistance(float lat1, float lon1, float lat2, float lon2);
-    static float getBearing (float lat1, float lon1, float lat2, float lon2);
     static float normalizeAngleDiff(float target, float current);
 
 public:
     AnchorHold();
+
+    static float getDistance(float lat1, float lon1, float lat2, float lon2);
+    static float getBearing (float lat1, float lon1, float lat2, float lon2);
 
     void setTarget(float lat, float lon);
     void activate();
