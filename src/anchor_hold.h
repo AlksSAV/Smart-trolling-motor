@@ -22,6 +22,9 @@ private:
     // Параметры зоны удержания
     float loiter_radius_m = 2.0f;   // Радиус "мёртвой зоны" (метод удержания)
     float max_distance_m  = 10.0f;  // Расстояние для максимальной тяги
+    
+    // Замороженная тяга ESC при входе в HEADING HOLD
+    int heading_hold_base_esc_us = 1500;
 
     static float normalizeAngleDiff(float target, float current);
 
@@ -34,6 +37,8 @@ public:
     void setTarget(float lat, float lon);
     void activate();
     void deactivate();
+    void setHeadingHoldBaseEsc(int us) { heading_hold_base_esc_us = us; }
+    int getHeadingHoldBaseEsc() const { return heading_hold_base_esc_us; }
     bool isActive() const { return is_active; }
     bool isThrustReversed() const { return thrust_reversed; }
 

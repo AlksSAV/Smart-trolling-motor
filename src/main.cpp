@@ -142,12 +142,6 @@ int angleToServoUs(float angleDeg) {
         (int)(SERVO_DIR * angleDeg * (SERVO_MAX_US - SERVO_NEUTRAL_US) / SERVO_RANGE_DEG);
 }
 
-bool thrustReversed = false;
-
-// HEADING_HOLD keeps the throttle captured on mode entry and steers with the
-// servo only, so holding course no longer modulates or resets ESC speed.
-int headingHoldBaseEscUs = ESC_NEUTRAL_US;
-
 float getCurrentYaw() {
     float real = sensorValue.un.arvrStabilizedRV.real;
     float i    = sensorValue.un.arvrStabilizedRV.i;
@@ -187,7 +181,7 @@ void updateEkfFromGnss() {
     float speedMs = gps.speed.mps();
     if (speedMs < GNSS_MIN_COG_MS) return;
 
-    if (currentMode == MODE_ANCHOR_HOLD && thrustReversed) return;
+    if (currentMode == MODE_ANCHOR_HOLD && anchor.isThrustReversed()) return;
 
     float cog = gps.course.deg();
     float innov = normalizeAngleDiff(cog, headingEKF.heading());
@@ -222,12 +216,10 @@ struct ControlState {
     bool imuLost;
 };
 
-static ControlState lastCtrl;
-
 void processSerialCommands();
 ControlState computeControl(float currentYaw);
-void calculateAndApplyControl();
-void displaySystemStatus();
+void calculateAndApplyControl(ControlState& ctrl);
+void displaySystemStatus(const ControlState& ctrl);
 
 // ============================================================
 // Setup
@@ -358,14 +350,15 @@ void loop() {
     processSerialCommands();
 
     static unsigned long last_control = 0;
+    static ControlState ctrlState;
     if (millis() - last_control > 50) {
-        calculateAndApplyControl();
+        calculateAndApplyControl(ctrlState);
         last_control = millis();
     }
 
     static unsigned long last_print = 0;
     if (millis() - last_print > 1000) {
-        displaySystemStatus();
+        displaySystemStatus(ctrlState);
         last_print = millis();
     }
 }
@@ -380,12 +373,12 @@ void processSerialCommands() {
     if (cmd == 'M') {
         currentMode = MODE_MANUAL;
         isSimulatedTarget = false;
-        thrustReversed = false;
         anchor.deactivate();
         esc_controller.setDirectPwm(ESC_NEUTRAL_US);
         ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
         ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
-        Serial.println("\n[MODE] MANUAL");
+        Serial.println(
+"[MODE] MANUAL");
     }
     else if (cmd == 'H') {
         if (imuStale()) {
@@ -394,14 +387,13 @@ void processSerialCommands() {
         }
         currentMode = MODE_HEADING_HOLD;
         isSimulatedTarget = false;
-        thrustReversed = false;
         anchor.deactivate();
         targetYaw = getFusedHeading();
         // Freeze the throttle the motor had when the mode was entered - from
         // now on HEADING_HOLD only steers, it never changes speed.
-        headingHoldBaseEscUs = esc_controller.getCurrentPwm();
+        anchor.setHeadingHoldBaseEsc(esc_controller.getCurrentPwm());
         Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg | ESC frozen: %d us\n",
-                      targetYaw, headingHoldBaseEscUs);
+                      targetYaw, anchor.getHeadingHoldBaseEsc());
     }
     else if (cmd == 'A') {
         if (!gps.location.isValid()) {
@@ -410,7 +402,6 @@ void processSerialCommands() {
         }
         currentMode = MODE_ANCHOR_HOLD;
         isSimulatedTarget = false;
-        thrustReversed = false;
         targetLat = gps.location.lat();
         targetLon = gps.location.lng();
         anchor.setTarget((float)targetLat, (float)targetLon);
@@ -420,7 +411,6 @@ void processSerialCommands() {
     else if (cmd == 'S') {
         currentMode = MODE_ANCHOR_HOLD;
         isSimulatedTarget = true;
-        thrustReversed = false;
         targetLat = 55.7558;
         targetLon = 37.6173;
         anchor.setTarget((float)targetLat, (float)targetLon);
@@ -465,7 +455,7 @@ ControlState computeControl(float currentYaw) {
         if (fabsf(yawError) > HEADING_DEADZONE_DEG) {
             out.servoAngle = constrainFloat(yawError, -SERVO_RANGE_DEG, SERVO_RANGE_DEG);
         }
-        out.escPWM = headingHoldBaseEscUs;
+        out.escPWM = anchor.getHeadingHoldBaseEsc();
         out.servoPWM = angleToServoUs(out.servoAngle);
     }
     else if (currentMode == MODE_ANCHOR_HOLD) {
@@ -494,7 +484,6 @@ ControlState computeControl(float currentYaw) {
 
         out.servoAngle = cmd.servo_angle;
         out.reversed   = anchor.isThrustReversed();
-        thrustReversed = out.reversed;
 
         out.escPWM = esc_controller.getSmoothedPwm(cmd.thrust);
         out.servoPWM = angleToServoUs(out.servoAngle);
@@ -507,9 +496,8 @@ ControlState computeControl(float currentYaw) {
     return out;
 }
 
-void calculateAndApplyControl() {
-    ControlState ctrl = computeControl(imuStale() ? 0.0f : getFusedHeading());
-    lastCtrl = ctrl;
+void calculateAndApplyControl(ControlState& ctrl) {
+    ctrl = computeControl(imuStale() ? 0.0f : getFusedHeading());
 
     ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
     // Outside the smoothed path the ramp state must follow the written PWM,
@@ -543,7 +531,7 @@ void calculateAndApplyControl() {
 // ============================================================
 // Status Display
 // ============================================================
-void displaySystemStatus() {
+void displaySystemStatus(const ControlState& ctrl) {
     Serial.println("----------------------------------------");
     String modeStr;
     switch (currentMode) {
@@ -572,20 +560,20 @@ void displaySystemStatus() {
                   gps.location.isValid() ? "YES" : "NO");
 
     if (currentMode == MODE_HEADING_HOLD || currentMode == MODE_ANCHOR_HOLD) {
-        if (lastCtrl.imuLost) {
+        if (ctrl.imuLost) {
             Serial.println("[WARN] IMU data stale - ESC/Servo neutral");
         } else if (currentMode == MODE_HEADING_HOLD) {
             Serial.printf("[OUT] Target: %6.1f deg | Err: %6.1f deg | ESC: %4d us | Servo: %4d us (%5.1f deg)\n",
-                          targetYaw, lastCtrl.headingError, lastCtrl.escPWM,
-                          lastCtrl.servoPWM, lastCtrl.servoAngle);
-        } else if (lastCtrl.gnssLost) {
+                          targetYaw, ctrl.headingError, ctrl.escPWM,
+                          ctrl.servoPWM, ctrl.servoAngle);
+        } else if (ctrl.gnssLost) {
             Serial.println("[WARN] ANCHOR HOLD: no GNSS fix - ESC/Servo neutral");
         } else {
             Serial.printf("[PID] Dist: %5.1fm | Bearing: %6.1f | OffBow: %6.1f\n",
-                          lastCtrl.distance, lastCtrl.bearing, lastCtrl.headingError);
+                          ctrl.distance, ctrl.bearing, ctrl.headingError);
             Serial.printf("[OUT] ESC: %4d us (%s) | Servo: %4d us (%5.1f deg)\n",
-                          lastCtrl.escPWM, lastCtrl.reversed ? "REV" : "FWD",
-                          lastCtrl.servoPWM, lastCtrl.servoAngle);
+                          ctrl.escPWM, ctrl.reversed ? "REV" : "FWD",
+                          ctrl.servoPWM, ctrl.servoAngle);
         }
     }
     Serial.println("----------------------------------------\n");
