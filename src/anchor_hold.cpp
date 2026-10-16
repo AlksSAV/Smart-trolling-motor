@@ -36,11 +36,9 @@ void AnchorHold::deactivate() {
 float AnchorHold::getDistance(float lat1, float lon1, float lat2, float lon2) {
     float dLat = (lat2 - lat1) * DEG_TO_RAD;
     float dLon = (lon2 - lon1) * DEG_TO_RAD;
-    float a = sinf(dLat * 0.5f) * sinf(dLat * 0.5f) +
-              cosf(lat1 * DEG_TO_RAD) * cosf(lat2 * DEG_TO_RAD) *
-              sinf(dLon * 0.5f) * sinf(dLon * 0.5f);
-    float c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
-    return EARTH_RADIUS * c;
+    float x = dLon * cosf((lat1 + lat2) * DEG_TO_RAD * 0.5f);
+    float y = dLat;
+    return sqrtf(x * x + y * y) * EARTH_RADIUS;
 }
 
 float AnchorHold::getBearing(float lat1, float lon1, float lat2, float lon2) {
