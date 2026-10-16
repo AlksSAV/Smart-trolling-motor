@@ -16,3 +16,6 @@ data/logs/
 .DS_Store
 secrets.py
 *.key
+logs/*.csv
+logs/*.log
+logs/com*.txt
