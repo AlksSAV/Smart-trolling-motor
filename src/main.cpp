@@ -84,6 +84,12 @@ const float MAX_DISTANCE_M     = 10.0;
 const float SIM_DISTANCE_M     = 9.0;  // Simulated boat distance from target
 const float THRUST_D_TAU_S     = 0.15; // Filtr time constant for the D term
 
+// Control loop runs every 50 ms, but loop() jitters, so the real interval is
+// measured. NOMINAL is the fallback for the very first call; MAX clamps an
+// outlier step (blocked loop) so it cannot blow up the PID integral.
+const float CONTROL_DT_NOMINAL_S = 0.05f;
+const float CONTROL_DT_MAX_S     = 0.25f;
+
 const int ESC_NEUTRAL_US       = 1500;
 
 const int SERVO_NEUTRAL_US     = 1500;
@@ -218,8 +224,8 @@ struct ControlState {
 };
 
 void processSerialCommands();
-ControlState computeControl(float currentYaw);
-void calculateAndApplyControl(ControlState& ctrl);
+ControlState computeControl(float currentYaw, float dt);
+void calculateAndApplyControl(ControlState& ctrl, float dt);
 void displaySystemStatus(const ControlState& ctrl);
 
 // ============================================================
@@ -353,9 +359,20 @@ void loop() {
 
     static unsigned long last_control = 0;
     static ControlState ctrlState;
-    if (millis() - last_control > 50) {
-        calculateAndApplyControl(ctrlState);
-        last_control = millis();
+    unsigned long now = millis();
+    if (now - last_control > 50) {
+        // dt is the real gap between control evaluations, not a nominal 50 ms:
+        // Serial/I2C handling and FreeRTOS tasks make loop() jitter, and both
+        // the thrust PID and ESCController integrate over this value.
+        float dt = (last_control == 0) ? CONTROL_DT_NOMINAL_S
+                                       : (now - last_control) / 1000.0f;
+        // A blocked loop (GNSS dropout, long print) must not inflate the
+        // integral or the derivative with an outlier step.
+        if (dt <= 0.0f)   dt = CONTROL_DT_NOMINAL_S;
+        if (dt > CONTROL_DT_MAX_S) dt = CONTROL_DT_MAX_S;
+
+        calculateAndApplyControl(ctrlState, dt);
+        last_control = now;
     }
 
     static unsigned long last_print = 0;
@@ -428,7 +445,7 @@ void processSerialCommands() {
 // ============================================================
 // Control Logic
 // ============================================================
-ControlState computeControl(float currentYaw) {
+ControlState computeControl(float currentYaw, float dt) {
     ControlState out;
     out.distance = 0.0;
     out.bearing = 0.0;
@@ -480,8 +497,6 @@ ControlState computeControl(float currentYaw) {
         }
         float speed_ms = (gps.speed.isValid()) ? gps.speed.mps() : 0.0f;
 
-        const float dt = 0.05f; // 50 ms = 20 Hz
-
         ControlOutput cmd = anchor.update(lat, lon, currentYaw, speed_ms, dt);
 
         out.servoAngle = cmd.servo_angle;
@@ -498,8 +513,8 @@ ControlState computeControl(float currentYaw) {
     return out;
 }
 
-void calculateAndApplyControl(ControlState& ctrl) {
-    ctrl = computeControl(imuStale() ? 0.0f : getFusedHeading());
+void calculateAndApplyControl(ControlState& ctrl, float dt) {
+    ctrl = computeControl(imuStale() ? 0.0f : getFusedHeading(), dt);
 
     ledcWrite(ESC_PIN, usToDuty(ctrl.escPWM));
     // Outside the smoothed path the ramp state must follow the written PWM,
