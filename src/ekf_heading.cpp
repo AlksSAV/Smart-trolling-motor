@@ -55,6 +55,12 @@ void EkfHeading::reset(float initialYawDeg) {
 void EkfHeading::predict(float dYawDeg, float dtSec) {
     if (dtSec <= 0.0f) return;
 
+    // Clamp the integration window. When the IMU stalls (I2C glitch, bus
+    // congestion) the next event may report a large dtSec; integrating
+    // dYaw - bias*dtSec over several seconds would blow up the heading
+    // estimate and the covariance.  0.5 s covers a full IMU timeout.
+    if (dtSec > 0.5f) dtSec = 0.5f;
+
     x_yaw  = wrap360(x_yaw + (dYawDeg - x_bias * dtSec));
     // bias unchanged by the model.
 
@@ -84,13 +90,21 @@ void EkfHeading::correct(float measurementDeg, float noiseDeg) {
     x_yaw  = wrap360(x_yaw + k0 * y);
     x_bias = x_bias + k1 * y;
 
-    // P = (I - K H) P
-    float n00 = p00 * (1.0f - k0);
-    float n01 = p01 * (1.0f - k0);
-    float n10 = p10 - k1 * p00;
-    float n11 = p11 - k1 * p01;
+    // Joseph form: P = (I - K H) P (I - K H)^T + K R K^T with H = [1, 0].
+    // The simpler P = (I - K H) P is only positive semi-definite in exact
+    // arithmetic; in float it lets det(P) drift to negative and p11 below
+    // zero, which diverges the filter. This form is PSD by construction
+    // (sum of two PSD terms), so no diagonal clamping is needed.
+    float ik0 = 1.0f - k0;
 
-    // Symmetrize: the update above is not symmetric-preserving in float arithmetic.
+    float n00 = ik0 * ik0 * p00 + k0 * k0 * r;
+    float n01 = ik0 * (p01 - k1 * p00) + k0 * k1 * r;
+    float n10 = ik0 * (p10 - k1 * p00) + k0 * k1 * r;
+    float n11 = p11 - k1 * (p10 + p01) + k1 * k1 * (p00 + r);
+
+    // Average the off-diagonal pair: the terms above are equal in exact
+    // arithmetic but differ by rounding, and keeping them apart makes F P F^T
+    // in predict() asymmetric.
     float off = 0.5f * (n01 + n10);
     p00 = n00;
     p11 = n11;
