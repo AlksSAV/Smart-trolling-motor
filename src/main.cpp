@@ -82,6 +82,7 @@ bool isSimulatedTarget = false;
 const float LOITER_RADIUS_M    = 2.0;
 const float MAX_DISTANCE_M     = 10.0;
 const float SIM_DISTANCE_M     = 9.0;  // Simulated boat distance from target
+const float THRUST_D_TAU_S     = 0.15; // Filtr time constant for the D term
 
 const int ESC_NEUTRAL_US       = 1500;
 
@@ -270,7 +271,8 @@ void setup() {
     esc_controller.setDeadzone(5.0f);
     esc_controller.setDirectPwm(ESC_NEUTRAL_US);
 
-    anchor.setThrustTunings(20.0f, 0.1f, -10.0f);
+    anchor.setThrustTunings(20.0f, 0.1f, +10.0f); // D=+10 демпфирование (знак верен для PIDController)
+    anchor.setThrustDerivativeTau(THRUST_D_TAU_S);
     anchor.setLoiterRadius(LOITER_RADIUS_M);
     anchor.setMaxDistance(MAX_DISTANCE_M);
     anchor.setReverseHysteresis(REVERSE_ENTER_DEG, REVERSE_EXIT_DEG);

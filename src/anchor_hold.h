@@ -53,6 +53,11 @@ public:
     void setThrustTunings(float p, float i, float d) {
         thrust_pid.setTunings(p, i, d);
     }
+
+    // Постоянная времени сглаживания производной (сек). 0 = выключить.
+    void setThrustDerivativeTau(float tau) {
+        thrust_pid.setDerivativeTau(tau);
+    }
     
     void setLoiterRadius(float radius) {
         loiter_radius_m = radius;
