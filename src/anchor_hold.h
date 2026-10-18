@@ -54,7 +54,7 @@ public:
         thrust_pid.setTunings(p, i, d);
     }
 
-    // Постоянная времени сглаживания производной (сек). 0 = выключить.
+    // Time constant of the derivative smoothing (seconds). 0 disables it.
     void setThrustDerivativeTau(float tau) {
         thrust_pid.setDerivativeTau(tau);
     }

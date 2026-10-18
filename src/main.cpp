@@ -90,6 +90,10 @@ const float THRUST_D_TAU_S     = 0.15; // Filtr time constant for the D term
 const float CONTROL_DT_NOMINAL_S = 0.05f;
 const float CONTROL_DT_MAX_S     = 0.25f;
 
+// Below this the bearing is meaningless: getBearing() ends in atan2f(0, 0),
+// which has no requirement to be 0 in C/C++, and a NaN would reach the servo.
+const float BEARING_MIN_DISTANCE_M = 0.1f;
+
 const int ESC_NEUTRAL_US       = 1500;
 
 const int SERVO_NEUTRAL_US     = 1500;
@@ -277,7 +281,8 @@ void setup() {
     esc_controller.setDeadzone(5.0f);
     esc_controller.setDirectPwm(ESC_NEUTRAL_US);
 
-    anchor.setThrustTunings(20.0f, 0.1f, +10.0f); // D=+10 демпфирование (знак верен для PIDController)
+    // D=+10 damps; the sign matches the derivative form in PIDController.
+    anchor.setThrustTunings(20.0f, 0.1f, +10.0f);
     anchor.setThrustDerivativeTau(THRUST_D_TAU_S);
     anchor.setLoiterRadius(LOITER_RADIUS_M);
     anchor.setMaxDistance(MAX_DISTANCE_M);
@@ -506,8 +511,12 @@ ControlState computeControl(float currentYaw, float dt) {
         out.servoPWM = angleToServoUs(out.servoAngle);
 
         out.distance = gps.distanceBetween(lat, lon, targetLat, targetLon);
-        out.bearing = anchor.getBearing(lat, lon, targetLat, targetLon);
-        out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
+        // Guard: at coincident points getBearing() ends in atan2f(0, 0) and its
+        // result is not defined by C/C++, so bearing and headingError stay 0.0.
+        if (out.distance >= BEARING_MIN_DISTANCE_M) {
+            out.bearing = anchor.getBearing(lat, lon, targetLat, targetLon);
+            out.headingError = normalizeAngleDiff(out.bearing, currentYaw);
+        }
     }
 
     return out;
@@ -535,7 +544,9 @@ void calculateAndApplyControl(ControlState& ctrl, float dt) {
             (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
                 ? gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
             (currentMode == MODE_ANCHOR_HOLD && !isSimulatedTarget && gps.location.isValid())
-                ? anchor.getBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f,
+                ? gps.distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon) >= BEARING_MIN_DISTANCE_M
+                    ? anchor.getBearing(gps.location.lat(), gps.location.lng(), targetLat, targetLon) : 0.0f
+                : 0.0f,
             headingEKF.heading(),
             headingEKF.biasDegPerSec(),
             lastEkfInnovDeg,

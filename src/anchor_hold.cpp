@@ -6,17 +6,18 @@
 #define EARTH_RADIUS   6371000.0f
 
 AnchorHold::AnchorHold()
-    // Значения по умолчанию: фактические задаёт setup() через setThrustTunings().
-    // P=20.0: реакция на расстояние
-    // I=0.1: компенсация постоянного сноса (течение/ветер)
-    // D=+10.0: демпфирование. Знак "плюс" верен: PIDController() считает
-    //      kd * d(error)/dt, а при приближении к цели error уменьшается,
-    //      поэтому производная отрицательна и сама по себе гасит тягу.
-    //      Отрицательный kd превратил бы демпфирование в раскачку.
-    // deadzone=0.5 м: PIDController сравнивает её с error напрямую, а error
-    //      здесь в метрах (distance - loiter_radius_m), а не в процентах.
-    //      Прежние 5.0 означали молчание тяги до distance = 7 м из 10 м.
-    //      0.5 м достаточно, чтобы ESC (своей 5% зоной) не "пел" у нуля.
+    // Defaults only: setup() overrides them through setThrustTunings().
+    // P=20.0: reaction to distance
+    // I=0.1: compensates a constant set (current/wind)
+    // D=+10.0: damping. The plus sign is correct: PIDController() computes
+    //      kd * d(error)/dt, and while approaching the target error shrinks,
+    //      so the derivative is negative and damps thrust on its own.
+    //      A negative kd would turn damping into oscillation.
+    // deadzone=0.5 m: PIDController compares it with the error directly, and
+    //      the error here is in metres (distance - loiter_radius_m), not a
+    //      percentage. The previous 5.0 meant no thrust below distance = 7 m
+    //      out of 10 m. 0.5 m is enough for the ESC (its own 5% band) to stay
+    //      silent near zero.
     : thrust_pid(20.0f, 0.1f, 10.0f, -100.0f, 100.0f, 30.0f, 0.5f)
 {
 }
