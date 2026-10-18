@@ -14,10 +14,10 @@ private:
     float integral = 0.0f;
     float prev_error = 0.0f;
     float filtered_derivative = 0.0f;
-    // Постоянная времени ФИНЧ (экспоненциального сглаживателя) для
-    // производной. Дифференцирование разности GNSS-фиксов на dt = 0.05
-    // усиливает дрожание позиции в 20 раз (0.1 м шума -> 2 м/с ->
-    // +/-20% тяги при kd = 10), поэтому сырое значение в расчёт не идёт.
+    // Time constant of the low-pass on the derivative term. Differencing two
+    // GNSS fixes at dt = 0.05 amplifies position jitter 20x (0.1 m of noise ->
+    // 2 m/s -> +/-20% thrust at kd = 10), so the raw value never reaches the
+    // output.
     float deriv_tau = 0.15f;
     float output_min, output_max;
     float integral_max;
@@ -48,8 +48,8 @@ public:
         if (integral < -integral_max) integral = -integral_max;
 
         float raw_derivative = (error - prev_error) / dt;
-        // alpha = dt / (tau + dt): коэффициент не зависит от частоты вызова,
-        // поэтому сглаживание остаётся прежним при другом dt.
+        // alpha = dt / (tau + dt): makes the smoothing independent of the call
+        // rate, so the same tau behaves identically at any dt.
         float alpha = dt / (deriv_tau + dt);
         filtered_derivative += alpha * (raw_derivative - filtered_derivative);
 
@@ -72,7 +72,7 @@ public:
         kp = p; ki = i; kd = d;
     }
 
-    // tau = 0 отключает сглаживание (сырая производная).
+    // tau = 0 disables smoothing (raw derivative).
     void setDerivativeTau(float tau) {
         deriv_tau = (tau > 0.0f) ? tau : 0.0f;
     }

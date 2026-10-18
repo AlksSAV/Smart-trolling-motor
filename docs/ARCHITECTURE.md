@@ -81,14 +81,17 @@ State: `[yaw, gyro_bias]` — heading и накопленный дрейф ма�
 | `rCOG` | 10° (1-sigma) |
 | COG speed threshold | 0.3 m/s |
 | Innovation gate | 60° |
+| `predict()` dt clamp | 0.5 s (покрывает IMU timeout) |
 
 **Принцип работы:**
 - `predict()` на каждый вектор поворота IMU (20 Гц): `yaw += delta_yaw - bias * dt`.
+  `dtSec` clamped до 0.5 с, чтобы stalled IMU не давал один шаг с dt²-масштабированием.
 - `correct()` на каждое решение GNSS (5 Гц): подаётся **только COG** из RMC.
   - Bearing к цели — не measurement heading, игнорируется.
   - COG отбрасывается: скорость < 0.3 м/с; ANCHOR_HOLD + реверс (COG указывает на 180° от носа).
 - Первое измерение `seedHeading()`: yaw жёстко ставится в рамку GNSS (истинный север). Bias не трогается, на следующих циклах коррекция сходится.
 - Gate 60°: измерения дальше отклоняются, счётчик в CSV-логе.
+- **Joseph form** для обновления ковариации: `P = (I - KH) P (I - KH)ᵀ + K R Kᵀ`. Алгебраически PSD, не зависит от точности float. Старая форма `P = (I - KH) P` PSD только в точной арифметике, в float det(P) дрейфует к нулю.
 
 **Тюнинг Q/R** — не сделан. Требуется CSV-лог (`L`) и анализ на ПК.
 
@@ -99,9 +102,16 @@ State: `[yaw, gyro_bias]` — heading и накопленный дрейф ма�
 |-----------|-------|
 | Loiter radius (dead zone) | 2.0 m |
 | Max distance (full speed) | 10.0 m |
+| Thrust PID `kp / ki / kd` | 20.0 / 0.1 / +10.0 (`kd` positive: the derivative of a shrinking distance error is negative and damps thrust) |
+| PID output / integral limit | -100..+100 % / 30.0 |
+| PID dead zone (thrust) | 0.5 m of distance error — `PIDController` compares it with the error directly, and the anchor error is in metres, not percent |
+| Derivative filter `tau` | 0.15 s (IIR on `d(error)/dt`; differentiating two GNSS fixes amplifies position jitter) |
+| Control `dt` | measured `now - last_control`; nominal 0.05 s, clamped to 0.25 s |
+| Bearing guard distance | 0.1 m — below it `getBearing()` is not called |
 | ESC neutral | 1500 us |
 | ESC dead band (ESC ignores it) | +/-50 us (1450..1550) |
 | ESC output range in firmware (`ESCController`) | 1000..2000 us, 1510 / 1490 at the dead-zone edge |
+| ESC ramp rate | 150 us/s |
 | Simulated anchor distance | 9.0 m |
 | Servo min / neutral / max | 1000 / 1500 / 2000 us = -90 / 0 / +90 deg (linear) |
 | Servo direction `SERVO_DIR` | +1 (sign not verified on the bench) |
@@ -109,7 +119,8 @@ State: `[yaw, gyro_bias]` — heading и накопленный дрейф ма�
 | HEADING_HOLD dead zone | 5 deg (steering only, no throttle change) |
 | LEDC frequency / resolution | 50 Hz / 14 bit |
 
-HEADING_HOLD values are starting values, not tuned.
+HEADING_HOLD values are starting values, not tuned. The thrust PID gains and the
+derivative filter are placeholders too: only compiled, never observed on the water.
 
 `ESCController` maps thrust percent to PWM with a float formula (no `map()`,
 which would truncate the percent to an integer and make the PWM step), then
@@ -125,8 +136,14 @@ ramps it at `ramp_rate` us/s toward the target.
 
 ### ArduPilot-inspired loiter logic (ANCHOR_HOLD)
 - Dead zone (loiter radius): 2 m — no throttle inside it.
-- P-controller for speed by distance: 0 at the radius, full at max distance.
-- Bearing is computed from the current position to the target (great-circle).
+- PID on distance error (`distance - loiter_radius`): P reacts to the distance, I
+  compensates a constant set (current/wind), D damps the approach. The D term is
+  filtered (see control parameters); the raw derivative of two GNSS fixes is noise.
+  A further 0.5 m dead zone keeps the ESC silent near zero thrust.
+- Bearing is computed from the current position to the target (great-circle), but
+  only when the distance is at least 0.1 m: at coincident points `getBearing()` ends
+  in `atan2f(0, 0)`, which C/C++ does not require to be 0, and a NaN would reach
+  the servo. The same guard applies to the CSV log.
 - Direction to the target relative to the bow `d` is in -180..+180 deg. Thrust goes
   forward with the servo at `d`; when the target is more than 100 deg off the bow it
   goes backward with the servo turned 180 deg away (`d -/+ 180`), so the reverse
@@ -136,6 +153,8 @@ ramps it at `ramp_rate` us/s toward the target.
 - Known limits: near +/-90 deg the servo hits its stop before the thrust direction
   switches (up to 10 deg pointing error inside the hysteresis band); the logged
   `servoAngle` is not clamped to +/-90 deg while the servo output is.
+  `max_distance_m` is not used in the thrust computation: the PID reaches its
+  +/-100 % limit at about 5 m of error, not at 10 m.
 
 ### Safety
 - GNSS loss in ANCHOR_HOLD: outputs forced to neutral, a warning is logged; the
@@ -152,7 +171,10 @@ ramps it at `ramp_rate` us/s toward the target.
 ## Control loop
 - IMU reads at 20 Hz.
 - GNSS navigation solutions at 5 Hz (`measRate` 200 ms stored in module Flash).
-- Control calculations at 20 Hz.
+- Control calculations at 20 Hz (`loop()` fires them when 50 ms have passed). The
+  integrator step `dt` is the **measured** gap between two control evaluations, not
+  a constant: `loop()` jitters because of Serial/I2C handling and FreeRTOS tasks.
+  The first call uses the nominal 0.05 s, an outlier step is clamped to 0.25 s.
 - EKF `predict()` on each IMU rotation vector; `correct()` on each valid COG (5 Hz when moving).
 - Status display at 1 Hz.
 
