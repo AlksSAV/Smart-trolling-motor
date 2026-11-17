@@ -5,6 +5,7 @@
 #include "ekf_heading.h"
 #include "anchor_hold.h"      // <-- НОВОЕ
 #include "esc_control.h"      // <-- НОВОЕ
+#include "rc_receiver.h"
 
 // ============================================================
 // Hardware Pin Assignment (see docs/pinmap.md)
@@ -57,6 +58,7 @@ bool logTuningEnabled = false;
 // ============================================================
 AnchorHold    anchor;
 ESCController esc_controller;
+RcReceiver    rc_receiver;
 
 // ============================================================
 // State Machine
@@ -228,9 +230,68 @@ struct ControlState {
 };
 
 void processSerialCommands();
+void handleRc();
+void enterManual();
+bool enterHeadingHold();
+bool enterAnchorHold();
+void enterAnchorHoldSim();
 ControlState computeControl(float currentYaw, float dt);
 void calculateAndApplyControl(ControlState& ctrl, float dt);
 void displaySystemStatus(const ControlState& ctrl);
+
+// ============================================================
+// Mode transition helpers (shared by serial and RC)
+// ============================================================
+
+void enterManual() {
+    currentMode = MODE_MANUAL;
+    isSimulatedTarget = false;
+    anchor.deactivate();
+    esc_controller.setDirectPwm(ESC_NEUTRAL_US);
+    ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
+    ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
+    Serial.println("[MODE] MANUAL");
+}
+
+bool enterHeadingHold() {
+    if (imuStale()) {
+        Serial.println("\n[ERROR] IMU not ready or data stale!");
+        return false;
+    }
+    currentMode = MODE_HEADING_HOLD;
+    isSimulatedTarget = false;
+    anchor.deactivate();
+    targetYaw = getFusedHeading();
+    anchor.setHeadingHoldBaseEsc(esc_controller.getCurrentPwm());
+    Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg | ESC frozen: %d us\n",
+                  targetYaw, anchor.getHeadingHoldBaseEsc());
+    return true;
+}
+
+bool enterAnchorHold() {
+    if (!gps.location.isValid()) {
+        Serial.println("\n[ERROR] No GNSS fix. Use 'S' to simulate indoors.");
+        return false;
+    }
+    currentMode = MODE_ANCHOR_HOLD;
+    isSimulatedTarget = false;
+    targetLat = gps.location.lat();
+    targetLon = gps.location.lng();
+    anchor.setTarget((float)targetLat, (float)targetLon);
+    anchor.activate();
+    Serial.printf("\n[MODE] ANCHOR HOLD (NEW PID). Target: %.6f, %.6f\n", targetLat, targetLon);
+    return true;
+}
+
+void enterAnchorHoldSim() {
+    currentMode = MODE_ANCHOR_HOLD;
+    isSimulatedTarget = true;
+    targetLat = 55.7558;
+    targetLon = 37.6173;
+    anchor.setTarget((float)targetLat, (float)targetLon);
+    anchor.activate();
+    Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED, NEW PID). Target: 9m at 90 deg");
+}
 
 // ============================================================
 // Setup
@@ -288,6 +349,11 @@ void setup() {
     anchor.setMaxDistance(MAX_DISTANCE_M);
     anchor.setReverseHysteresis(REVERSE_ENTER_DEG, REVERSE_EXIT_DEG);
     Serial.println("[CTRL] AnchorHold & ESCController initialized");
+
+    // --- 5. RC receiver ---
+    // Attaches a CHANGE interrupt per channel pin (GPIO 4,5,6,7,10,11).
+    rc_receiver.begin();
+    Serial.println("[RC] Receiver listening on GPIO 4,5,6,7,10,11");
 
 #if RUN_STARTUP_TEST
     Serial.println("\n========================================");
@@ -362,6 +428,8 @@ void loop() {
 
     processSerialCommands();
 
+    handleRc();
+
     static unsigned long last_control = 0;
     static ControlState ctrlState;
     unsigned long now = millis();
@@ -395,57 +463,58 @@ void processSerialCommands() {
     char cmd = toupper(Serial.read());
 
     if (cmd == 'M') {
-        currentMode = MODE_MANUAL;
-        isSimulatedTarget = false;
-        anchor.deactivate();
-        esc_controller.setDirectPwm(ESC_NEUTRAL_US);
-        ledcWrite(ESC_PIN, usToDuty(ESC_NEUTRAL_US));
-        ledcWrite(SERVO_PIN, usToDuty(SERVO_NEUTRAL_US));
-        Serial.println(
-"[MODE] MANUAL");
+        enterManual();
     }
     else if (cmd == 'H') {
-        if (imuStale()) {
-            Serial.println("\n[ERROR] IMU not ready or data stale!");
-            return;
-        }
-        currentMode = MODE_HEADING_HOLD;
-        isSimulatedTarget = false;
-        anchor.deactivate();
-        targetYaw = getFusedHeading();
-        // Freeze the throttle the motor had when the mode was entered - from
-        // now on HEADING_HOLD only steers, it never changes speed.
-        anchor.setHeadingHoldBaseEsc(esc_controller.getCurrentPwm());
-        Serial.printf("\n[MODE] HEADING HOLD. Target Yaw: %.1f deg | ESC frozen: %d us\n",
-                      targetYaw, anchor.getHeadingHoldBaseEsc());
+        enterHeadingHold();
     }
     else if (cmd == 'A') {
-        if (!gps.location.isValid()) {
-            Serial.println("\n[ERROR] No GNSS fix. Use 'S' to simulate indoors.");
-            return;
-        }
-        currentMode = MODE_ANCHOR_HOLD;
-        isSimulatedTarget = false;
-        targetLat = gps.location.lat();
-        targetLon = gps.location.lng();
-        anchor.setTarget((float)targetLat, (float)targetLon);
-        anchor.activate();
-        Serial.printf("\n[MODE] ANCHOR HOLD (NEW PID). Target: %.6f, %.6f\n", targetLat, targetLon);
+        enterAnchorHold();
     }
     else if (cmd == 'S') {
-        currentMode = MODE_ANCHOR_HOLD;
-        isSimulatedTarget = true;
-        targetLat = 55.7558;
-        targetLon = 37.6173;
-        anchor.setTarget((float)targetLat, (float)targetLon);
-        anchor.activate();
-        Serial.println("\n[MODE] ANCHOR HOLD (SIMULATED, NEW PID). Target: 9m at 90 deg");
+        enterAnchorHoldSim();
     }
     else if (cmd == 'L') {
         logTuningEnabled = !logTuningEnabled;
         Serial.printf("\n[LOG] Tuning CSV %s\n", logTuningEnabled ? "ON" : "OFF");
     }
 }
+
+void handleRc() {
+    rc_receiver.update();
+
+    // --- Failsafe: if all channels are lost, force MANUAL + neutral ---
+    // Only armed after the receiver has shown a signal at least once: with
+    // nothing wired (bench/serial testing) every channel reads lost, and an
+    // unconditional failsafe would fight the serial mode commands.
+    if (rc_receiver.hasSeenSignal() && rc_receiver.allLost()) {
+        if (currentMode != MODE_MANUAL) {
+            Serial.println("\n[RC] FAILSAFE: all channels lost → MANUAL");
+            enterManual();
+        }
+        return;
+    }
+
+    // --- Mode change via 3-position switch on CH3 ---
+    int newMode = rc_receiver.pollModeChange();
+    if (newMode >= 0) {
+        if (newMode == 0) {
+            Serial.println("[RC] Mode switch → MANUAL");
+            enterManual();
+        }
+        else if (newMode == 1) {
+            if (enterHeadingHold()) {
+                Serial.println("[RC] Mode switch → HEADING HOLD");
+            }
+        }
+        else if (newMode == 2) {
+            if (enterAnchorHold()) {
+                Serial.println("[RC] Mode switch → ANCHOR HOLD");
+            }
+        }
+    }
+}
+
 
 // ============================================================
 // Control Logic
@@ -468,7 +537,14 @@ ControlState computeControl(float currentYaw, float dt) {
     }
 
     if (currentMode == MODE_MANUAL) {
-        // ESC and servo stay at neutral
+        // Pass-through from the RC sticks when a receiver signal is present.
+        // With no signal (bench testing, serial-only control) both stay at
+        // neutral, as before the RC integration.
+        if (rc_receiver.hasSeenSignal() && !rc_receiver.allLost()) {
+            out.servoAngle = rc_receiver.steerAngleDeg();
+            out.escPWM = esc_controller.getSmoothedPwm(rc_receiver.throttlePercent());
+            out.servoPWM = angleToServoUs(out.servoAngle);
+        }
     }
     else if (currentMode == MODE_HEADING_HOLD) {
         float yawError = normalizeAngleDiff(targetYaw, currentYaw);

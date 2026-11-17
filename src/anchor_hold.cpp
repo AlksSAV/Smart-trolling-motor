@@ -95,7 +95,28 @@ ControlOutput AnchorHold::update(float current_lat, float current_lon,
         thrust_reversed = false;
     }
 
+    // === Вычисление величины тяги через ПИД ===
+    // Ошибка = текущее расстояние - радиус удержания
+    float distance_error = distance - loiter_radius_m;
+    
+    // ПИД по расстоянию с демпфированием
+    float raw_thrust = thrust_pid.compute(distance_error, dt);
+    
+    // Применяем направление (знак)
+    out.thrust = thrust_reversed ? -raw_thrust : raw_thrust;
+
     // === Вычисление угла серво ===
+    // Порядок важен: угол решается ПОСЛЕ тяги, потому что при нулевой тяге
+    // руль бесполезен. Analog of ArduPilot AP_MotorsUGV::output_regular():
+    // there the steering limit is throttle * tan(VEC_ANGLEMAX), so at zero
+    // throttle the steering output is forced to zero too. With the motor
+    // angled and the prop making no thrust, the reaction torque still yaws
+    // the hull and the boat starts circling instead of holding.
+    if (fabsf(out.thrust) < min_thrust_for_steer_percent) {
+        out.servo_angle = 0.0f;
+        return out;
+    }
+
     if (thrust_reversed) {
         // Цель сзади: поворачиваем серво на 180° от направления цели
         // и включаем реверс
@@ -107,19 +128,11 @@ ControlOutput AnchorHold::update(float current_lat, float current_lon,
         out.servo_angle = target_off_bow;
     }
 
-    // Ограничиваем угол серво ±90°
-    if (out.servo_angle >  90.0f) out.servo_angle =  90.0f;
-    if (out.servo_angle < -90.0f) out.servo_angle = -90.0f;
-
-    // === Вычисление величины тяги через ПИД ===
-    // Ошибка = текущее расстояние - радиус удержания
-    float distance_error = distance - loiter_radius_m;
-    
-    // ПИД по расстоянию с демпфированием
-    float raw_thrust = thrust_pid.compute(distance_error, dt);
-    
-    // Применяем направление (знак)
-    out.thrust = thrust_reversed ? -raw_thrust : raw_thrust;
+    // Ограничиваем угол физическим пределом поворотной колонки. Рамка та же,
+    // что у angleToServoUs(): единицы прошивки, а не гарантированный угол
+    // текущего серво (см. TODO про замену серво на 180°).
+    if (out.servo_angle >  vec_angle_max_deg) out.servo_angle =  vec_angle_max_deg;
+    if (out.servo_angle < -vec_angle_max_deg) out.servo_angle = -vec_angle_max_deg;
 
     return out;
 }
